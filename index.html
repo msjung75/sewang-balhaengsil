@@ -129,7 +129,7 @@ const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;"
 const LV={ok:"정상",warn:"주의",fail:"실패",wait:"대기",info:"참고"};
 const TE=new TextEncoder(), TD=new TextDecoder();
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
-let CFG=null, K=null, TOK="", S=null, PING=null, TAB=LS.get("sw-tab","today"), PREDATE=null, LOADING=false, LASTERR="";
+let CFG=null, K=null, TOK="", S=null, PING=null, TAB=LS.get("sw-tab","today"), PREDATE=null, SWAPDAY=null, LOADING=false, LASTERR="";
 
 function toast(m,ms=3500){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",ms)}
 const b64e=u=>{let s="";for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
@@ -371,7 +371,7 @@ let TF=LS.get("sw-tf","all");
 function vTopics(){
   const reqs=(S.requests||[]).filter(r=>r.status==="requested");
   const regs=["all","국내","해외"], T=(S.topics||[]).filter(t=>TF==="all"||(TF==="국내"?t.region==="국내":t.region!=="국내"));
-  $("#main").innerHTML=`${PREDATE?`<div class="alert info">${dlabel(PREDATE)} ${PREDATE.slice(5)}에 올릴 소재를 고르세요 <button class="btn sm" id="pdx" style="margin-left:6px">해제</button></div>`:""}
+  $("#main").innerHTML=`${SWAPDAY?`<div class="alert warn">${dlabel(SWAPDAY)} ${SWAPDAY.slice(5)} 회차를 바꿀 새 주제를 고르세요 — 기존 회차는 '날짜 없는 회차'로 빠집니다 <button class="btn sm" id="swx" style="margin-left:6px">취소</button></div>`:""}${PREDATE?`<div class="alert info">${dlabel(PREDATE)} ${PREDATE.slice(5)}에 올릴 소재를 고르세요 <button class="btn sm" id="pdx" style="margin-left:6px">해제</button></div>`:""}
    ${reqs.length?`<h2>만드는 중인 요청</h2>${reqs.map(r=>`<div class="card" data-req="${esc(r.id)}"><div class="ttl">${esc(r.title_ko||r.title)}</div>
      <div class="meta">${dlabel(r.target_date)} 게시 목표 · ${kindBadge(r.format)}<span class="badge">${esc(r.category||"")}</span>${r.urgent?`<span class="badge warn">급함</span>`:""}</div>
      ${r.note?`<div class="sub">메모: ${esc(r.note)}</div>`:""}</div>`).join("")}`:""}
@@ -388,6 +388,7 @@ function vTopics(){
   $$("[data-req]").forEach(c=>c.onclick=()=>reqSheet(S.requests.find(r=>r.id===c.dataset.req)));
   $("#own").onclick=()=>topicSheet(null);
   if($("#pdx")) $("#pdx").onclick=()=>{PREDATE=null;render()};
+  if($("#swx")) $("#swx").onclick=()=>{SWAPDAY=null;render()};
 }
 function topicSheet(t){
   const own=!t; t=t||{id:"",title:"",category:"점주계산",format:"카드",angle:"",url:"",src:"직접 입력",flags:[]};
@@ -400,7 +401,7 @@ function topicSheet(t){
       <div class="sub">자동 번역·본문 발췌 — 숫자는 원문 확인${d.warn?" · ⚠ "+esc(d.warn):""}</div></div>`:`<div class="sub" style="margin-top:8px">요점은 맥이 미리 만든 기사만 보입니다.</div>`}
     ${t.url?`<a class="btn sm" href="${esc((d&&d.url)||t.url)}" target="_blank" rel="noopener">원문 기사 열기 ↗</a>`:""}
     ${t.flags&&t.flags.length?`<div class="flag">⚠ ${t.flags.map(esc).join("<br>⚠ ")}</div>`:""}`}
-   <label>게시 날짜<select id="tD">${dayOpts(PREDATE,true)}</select></label>
+   ${SWAPDAY?`<div class="alert warn" style="margin-top:10px">${dlabel(SWAPDAY)} ${SWAPDAY.slice(5)} 회차를 이 주제로 바꿉니다</div>`:`<label>게시 날짜<select id="tD">${dayOpts(PREDATE,true)}</select></label>`}
    <div class="row"><label class="grow">종류<select id="tC">${["점주계산","가게운영","데이터","주류트렌드","해외리포트","시즌캘린더","그집이술","사장님노트","기타"].map(c=>`<option ${c===t.category?"selected":""}>${c}</option>`).join("")}</select></label>
    <label class="grow">포맷<select id="tF"><option ${t.format==="릴스"?"selected":""}>릴스</option><option ${t.format!=="릴스"?"selected":""}>카드</option></select></label></div>
    <label>이렇게 만들어 주세요 (각도)<textarea id="tA" style="min-height:64px">${esc(t.angle||"")}</textarea></label>
@@ -411,14 +412,16 @@ function topicSheet(t){
   $("#tGo").onclick=async()=>{
     const title=own?$("#tT").value.trim():t.title; if(!title) return toast("주제를 적어 주세요");
     $("#tGo").disabled=true;
-    try{await send("request_topic",{id:t.id||"",title,url:t.url||"",src:t.src||"폰 직접 입력",category:$("#tC").value,format:$("#tF").value,
-      angle:$("#tA").value,note:$("#tN").value,date:$("#tD").value,urgent:$("#tU").checked},"자료 만들기: "+(title.slice(0,24)));
-      PREDATE=null;closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message);$("#tGo").disabled=false}};
+    const body={id:t.id||"",title,url:t.url||"",src:t.src||"폰 직접 입력",category:$("#tC").value,format:$("#tF").value,
+      angle:$("#tA").value,note:$("#tN").value,date:SWAPDAY||$("#tD").value,urgent:$("#tU").checked};
+    try{if(SWAPDAY) await send("swap_topic",body,SWAPDAY.slice(5)+" 주제 교체: "+title.slice(0,20));
+      else await send("request_topic",body,"자료 만들기: "+(title.slice(0,24)));
+      PREDATE=null;SWAPDAY=null;closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message);$("#tGo").disabled=false}};
   if($("#tX")) $("#tX").onclick=async()=>{try{await send("dismiss_topic",{id:t.id},"후보 빼기");closeSheet()}catch(e){toast(e.message)}};
 }
 function reqSheet(r){
   if(!r) return;
-  openSheet("만드는 중인 요청",`<div class="ttl">${esc(r.title_ko||r.title)}</div><div class="meta">요청 ${esc(r.requested_at||"")} · ${esc(r.src||"")}</div>
+  openSheet("만드는 중인 요청",`<label>주제 (바꾸려면 고쳐 쓰세요)<textarea id="rT" style="min-height:64px">${esc(r.title_ko||r.title)}</textarea></label><div class="meta">요청 ${esc(r.requested_at||"")} · ${esc(r.src||"")}</div>
    ${(r.points_ko||[]).length?`<ol class="pts">${r.points_ko.map(p=>`<li>${esc(p)}</li>`).join("")}</ol>`:""}
    ${r.url?`<a class="btn sm" href="${esc(r.article_url||r.url)}" target="_blank" rel="noopener">원문 ↗</a>`:""}
    <label>게시 날짜<select id="rD">${dayOpts(r.target_date)}</select></label>
@@ -426,7 +429,7 @@ function reqSheet(r){
    <label>각도<textarea id="rA" style="min-height:60px">${esc(r.angle||"")}</textarea></label>
    <label>메모<textarea id="rN" style="min-height:60px">${esc(r.note||"")}</textarea></label>
    <div class="acts"><button class="btn primary" id="rS">저장</button><button class="btn danger" id="rC">요청 취소</button></div>`);
-  $("#rS").onclick=async()=>{try{await send("update_request",{id:r.id,date:$("#rD").value,format:$("#rF").value,angle:$("#rA").value,note:$("#rN").value},"요청 수정");closeSheet()}catch(e){toast(e.message)}};
+  $("#rS").onclick=async()=>{try{await send("update_request",{id:r.id,title:($("#rT").value.trim()===(r.title_ko||r.title)?"":$("#rT").value.trim()),date:$("#rD").value,format:$("#rF").value,angle:$("#rA").value,note:$("#rN").value},"요청 수정");closeSheet()}catch(e){toast(e.message)}};
   armTwice($("#rC"),"한 번 더 누르면 취소",async()=>{try{await send("update_request",{id:r.id,cancel:true},"요청 취소");closeSheet()}catch(e){toast(e.message)}});
 }
 
@@ -458,6 +461,7 @@ function openEp(rel){
    <div class="acts"><button class="btn sm" id="eSave">캡션 저장</button><span class="sub" id="eLen"></span></div>
    <h2>바꾸기</h2>
    <label>게시 날짜<select id="eD">${dayOpts(d?d.day:"")}</select></label>
+   ${d&&!posted?`<button class="btn sm block" style="margin-top:10px" id="eSwap">🔁 이 날 다른 주제로 바꾸기</button>`:""}
    <div class="acts"><button class="btn sm" id="eDate">날짜 바꾸기</button><button class="btn sm" id="ePrev">텔레그램 미리보기 다시</button></div>
    <label>수정 요청 (이미지·영상 자체를 고칠 때)<textarea id="eRev" placeholder="예: 3번 카드 숫자 크게, 마지막 장에 연락처 빼기"></textarea></label>
    <div class="acts"><button class="btn sm" id="eRevGo">수정 요청 보내기</button></div>
@@ -468,6 +472,7 @@ function openEp(rel){
   const cap=$("#eCap"), upd=()=>{const t=cap.value,n=(t.match(/#[^\s#]+/g)||[]).length;$("#eLen").textContent=`${t.length}자 · 해시태그 ${n}개${n<3||n>5?" ⚠ 3~5개":""}`};cap.oninput=upd;upd();
   $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장")}catch(e){toast(e.message)}};
   $("#eDate").onclick=async()=>{const v=$("#eD").value;if(!v)return;try{await send("schedule",{date:v,folder:rel},"날짜 → "+v.slice(5))}catch(e){toast(e.message)}};
+  if($("#eSwap")) $("#eSwap").onclick=()=>{SWAPDAY=d.day;PREDATE=null;closeSheet();TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)};
   $("#ePrev").onclick=async()=>{try{await send("preview",{folder:rel},"미리보기 재발송")}catch(e){toast(e.message)}};
   $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");$("#eRev").value=""}catch(e){toast(e.message)}};
   if($("#ePub")&&chk.verdict!=="fail") armTwice($("#ePub"),"한 번 더 누르면 인스타에 게시됩니다",async()=>{
@@ -492,10 +497,26 @@ function vPhoto(){
     <button class="btn primary block" style="margin-top:14px" id="pGo">맥으로 보내기</button>
     <div class="bar" id="pbar" hidden><i></i></div><div class="sub" id="pmsg"></div>
    </div>
-   ${S.photos&&S.photos.length?`<h2>맥 사진함에 있는 것 (${S.photos.length})</h2><div class="card">${S.photos.slice(0,12).map(p=>`<div class="res">${p.video?"🎬":"🖼"} ${esc(p.name)} <span class="sub">${esc(p.mtime)} · ${esc(p.where)}</span></div>`).join("")}</div>`:""}`;
+   ${S.photos&&S.photos.length?`<h2>OneDrive로 넣은 사진 (${S.photos.length})</h2>
+     <p class="sub">인스타 폴더 맨 위나 _사진넣기에 넣은 사진입니다. 눌러서 고른 뒤 회차로 만드세요. 새로 넣은 사진은 3분 안에 여기 뜹니다.</p>
+     <div class="photos" id="mpv">${S.photos.map((p,i)=>`<div data-mp="${i}" style="outline-offset:-3px">${p.thumb?`<img data-m="${esc(p.thumb)}" alt="">`:`<span style="position:static;display:block;padding:8px;background:none;color:var(--muted)">${p.video?"🎬":"🖼"} ${esc(p.name)}</span>`}<span>${esc(p.mtime)}</span></div>`).join("")}</div>
+     <div id="mform" hidden><div class="sub" id="mcnt" style="margin-top:8px"></div>
+      <label>매장 이름 / 제목<input type="text" id="mT"></label>
+      <div class="row"><label class="grow">종류<select id="mC">${["그집이술","사장님노트","신규오픈","현장","기타"].map(c=>`<option>${c}</option>`).join("")}</select></label>
+       <label class="grow">포맷<select id="mF"><option>릴스(실사진 켄번즈)</option><option>카드(사진 위주)</option></select></label></div>
+      <label>게시 날짜<select id="mD">${dayOpts("",true)}</select></label>
+      <label>메모<textarea id="mN"></textarea></label>
+      <button class="btn primary block" style="margin-top:12px" id="mGo">고른 사진으로 회차 만들기</button></div>`:`<p class="sub" style="margin-top:16px">OneDrive 인스타 폴더 맨 위나 _사진넣기에 사진을 넣으면, 맥이 받는 대로(3분 안) 여기에 뜹니다.</p>`}`;
   $("#pf").onchange=e=>{PICK=PICK.concat([...e.target.files]).slice(0,20);showPick()};
   showPick();
   $("#pGo").onclick=sendPhotos;
+  const MSEL=new Set();
+  $$("[data-mp]").forEach(el=>el.onclick=()=>{const i=+el.dataset.mp;MSEL.has(i)?MSEL.delete(i):MSEL.add(i);el.style.outline=MSEL.has(i)?"3px solid var(--accent)":"";
+    $("#mform").hidden=!MSEL.size;$("#mcnt").textContent=`${MSEL.size}장 골랐습니다`});
+  if($("#mGo")) $("#mGo").onclick=async()=>{const t=$("#mT").value.trim();if(!t)return toast("매장 이름이나 제목을 적어 주세요");
+    $("#mGo").disabled=true;
+    try{await send("assign_photos",{photos:[...MSEL].map(i=>S.photos[i].rel),title:t,category:$("#mC").value,format:$("#mF").value,date:$("#mD").value,note:$("#mN").value},"사진함 회차: "+t+" "+MSEL.size+"장");
+      TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message);$("#mGo").disabled=false}};
 }
 function showPick(){
   const pv=$("#pv"); if(!pv) return;
