@@ -367,28 +367,64 @@ function vCal(){
 }
 
 // ── 소재 ──
-let TF=LS.get("sw-tf","all");
+let TF=LS.get("sw-tf","deep"), WF=LS.get("sw-wf","all");
 function vTopics(){
   const reqs=(S.requests||[]).filter(r=>r.status==="requested");
-  const regs=["all","국내","해외"], T=(S.topics||[]).filter(t=>TF==="all"||(TF==="국내"?t.region==="국내":t.region!=="국내"));
+  const regs=[["deep","🌏 해외 심층"],["all","추천 전체"],["국내","국내"],["world","해외 뉴스"]];
+  const T=(S.topics||[]).filter(t=>TF==="all"||(TF==="국내"&&t.region==="국내"));
   $("#main").innerHTML=`${SWAPDAY?`<div class="alert warn">${dlabel(SWAPDAY)} ${SWAPDAY.slice(5)} 회차를 바꿀 새 주제를 고르세요 — 기존 회차는 '날짜 없는 회차'로 빠집니다 <button class="btn sm" id="swx" style="margin-left:6px">취소</button></div>`:""}${PREDATE?`<div class="alert info">${dlabel(PREDATE)} ${PREDATE.slice(5)}에 올릴 소재를 고르세요 <button class="btn sm" id="pdx" style="margin-left:6px">해제</button></div>`:""}
    ${reqs.length?`<h2>만드는 중인 요청</h2>${reqs.map(r=>`<div class="card" data-req="${esc(r.id)}"><div class="ttl">${esc(r.title_ko||r.title)}</div>
      <div class="meta">${dlabel(r.target_date)} 게시 목표 · ${kindBadge(r.format)}<span class="badge">${esc(r.category||"")}</span>${r.urgent?`<span class="badge warn">급함</span>`:""}</div>
      ${r.note?`<div class="sub">메모: ${esc(r.note)}</div>`:""}</div>`).join("")}`:""}
    <div class="acts" style="margin:6px 0 4px"><button class="btn primary" id="own">✏️ 직접 주제 쓰기</button></div>
-   <h2>소재 후보 <span class="sub">뉴스·인허가·인스타 반응으로 점수순 · ${esc((S.collected.news||"").slice(5,16))} 수집</span></h2>
-   <div class="seg">${regs.map(r=>`<button data-r="${r}" class="${TF===r?"on":""}">${r==="all"?"전체":r}</button>`).join("")}</div>
+   <div class="seg" style="margin-top:14px">${regs.map(([k,l])=>`<button data-r="${k}" class="${TF===k?"on":""}">${l}</button>`).join("")}</div>
+   ${TF==="deep"?deepView():TF==="world"?worldView():`<p class="sub">뉴스·인허가·인스타 반응으로 점수순 · ${esc((S.collected.news||"").slice(5,16))} 수집</p>
    ${T.map(t=>`<div class="card" data-topic="${esc(t.id)}"><div class="ttl">${esc(t.title_ko||t.title)}</div>
      ${t.title_ko&&t.title_ko!==t.title?`<div class="sub">${esc(t.title)}</div>`:""}
      <div class="meta">${esc(t.src)} · ${esc(t.region)} · <span class="badge">${esc(t.category)}</span>${kindBadge(t.format)}${t.status==="requested"?`<span class="badge warn">요청됨 ${esc((t.requested_for||"").slice(5))}</span>`:""}</div>
      ${t.digest&&t.digest.points&&t.digest.points.length?`<div class="sub" style="margin-top:4px">• ${esc(t.digest.points[0]).slice(0,110)}</div>`:""}
-     ${t.flags&&t.flags.length?`<div class="flag">⚠ ${t.flags.map(esc).join(" / ")}</div>`:""}</div>`).join("")||`<div class="empty">후보가 없습니다.</div>`}`;
+     ${t.flags&&t.flags.length?`<div class="flag">⚠ ${t.flags.map(esc).join(" / ")}</div>`:""}</div>`).join("")||`<div class="empty">후보가 없습니다.</div>`}`}`;
+  $$("[data-deep]").forEach(c=>c.onclick=ev=>{if(ev.target.closest("a"))return;const [ri,ii]=c.dataset.deep.split("_").map(Number);deepSheet(S.deep[ri].items[ii])});
+  $$("[data-w]").forEach(c=>c.onclick=()=>{const w=S.world[+c.dataset.w];topicSheet({id:"w_"+c.dataset.w,title:w.title,title_ko:w.title_ko,url:w.url,src:w.src,pub:w.pub,region:w.region,category:"해외리포트",format:"카드",angle:"해외 흐름 — 한국 사장님 가게에 적용하면?",flags:w.flags||[],digest:w.digest})});
+  $$("[data-wf]").forEach(b=>b.onclick=()=>{WF=b.dataset.wf;LS.set("sw-wf",WF);render()});
   $$("[data-r]").forEach(b=>b.onclick=()=>{TF=b.dataset.r;LS.set("sw-tf",TF);render()});
   $$("[data-topic]").forEach(c=>c.onclick=()=>topicSheet(S.topics.find(t=>t.id===c.dataset.topic)));
   $$("[data-req]").forEach(c=>c.onclick=()=>reqSheet(S.requests.find(r=>r.id===c.dataset.req)));
   $("#own").onclick=()=>topicSheet(null);
   if($("#pdx")) $("#pdx").onclick=()=>{PREDATE=null;render()};
   if($("#swx")) $("#swx").onclick=()=>{SWAPDAY=null;render()};
+}
+function deepView(){
+  const D=S.deep||[];
+  if(!D.length) return `<div class="empty">아직 심층 리포트가 없습니다. 매일 아침 Claude가 일본·미국·유럽 원문을 읽고 정리해 올립니다.</div>`;
+  return `<p class="sub">Claude가 원문을 직접 읽고 한국어로 정리했습니다 — 요약·핵심 숫자·한국 사장님에게 주는 의미·콘텐츠 각도</p>`+D.map((r,ri)=>`<h2>${esc(r.date)} <span class="sub">${r.items.length}건</span></h2>`+r.items.map((x,ii)=>`
+    <div class="card" data-deep="${ri}_${ii}"><div class="meta">${esc(x.flag||"")} <b>${esc(x.country)}</b> · ${esc(x.source)} · ${esc(x.source_date||"")}</div>
+     <div class="ttl" style="margin-top:4px">${esc(x.title_ko)}</div>
+     <div class="chips">${(x.numbers||[]).map(n=>`<span class="badge">${esc(n.k)} <b>${esc(n.v)}</b></span>`).join("")}</div>
+     <div class="sub" style="margin-top:6px">${esc((x.summary||[])[0]||"")}</div>
+     <div class="meta" style="margin-top:6px">${kindBadge(x.format)} 눌러서 자세히 보기</div></div>`).join("")).join("");
+}
+function deepSheet(x){
+  openSheet(x.title_ko,`<div class="meta">${esc(x.flag||"")} ${esc(x.country)} · ${esc(x.source)} · ${esc(x.source_date||"")}</div>
+   ${x.title_orig?`<div class="sub" style="margin-top:4px">원제: ${esc(x.title_orig)}</div>`:""}
+   <div class="chips" style="margin-top:8px">${(x.numbers||[]).map(n=>`<span class="badge">${esc(n.k)} <b>${esc(n.v)}</b></span>`).join("")}</div>
+   <h2>무슨 내용인가</h2><ol class="pts">${(x.summary||[]).map(t=>`<li>${esc(t)}</li>`).join("")}</ol>
+   <h2>한국 사장님에게 주는 의미</h2><div class="card" style="font-size:14px">${esc(x.why||"")}</div>
+   <h2>이렇게 만들면 좋습니다</h2><div class="card" style="font-size:14px">${kindBadge(x.format)} ${esc(x.angle||"")}</div>
+   ${x.check?`<div class="flag">⚠ 확인할 점: ${esc(x.check)}</div>`:""}
+   <div class="acts">${(x.urls||[]).map((u,i)=>`<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener">원문 ${i+1} ↗</a>`).join("")}</div>
+   <button class="btn primary block" style="margin-top:14px" id="dGo">📸 이 주제로 인스타 자료 만들기</button>`);
+  $("#dGo").onclick=()=>topicSheet({id:x.id,title:x.title_ko,url:(x.urls||[])[0]||"",src:x.source,pub:x.source_date,region:x.country,category:"해외리포트",format:x.format==="릴스"?"릴스":"카드",angle:x.angle,flags:x.check?[x.check]:[],digest:{desc_ko:(x.summary||[]).join(" "),points:[x.why].filter(Boolean),url:(x.urls||[])[0]}});
+}
+function worldView(){
+  const W=S.world||[], regs=["all",...new Set(W.map(w=>w.region))];
+  const L=W.map((w,i)=>[w,i]).filter(([w])=>WF==="all"||w.region===WF);
+  return `<p class="sub">일본·미국·유럽·동남아·중화권 외식·주류 뉴스 ${W.length}건 (한국어 번역) · 누르면 요점·본문 번역</p>
+   <div class="seg">${regs.map(r=>`<button data-wf="${esc(r)}" class="${WF===r?"on":""}">${r==="all"?"전체":esc(r)} ${r==="all"?W.length:W.filter(w=>w.region===r).length}</button>`).join("")}</div>
+   ${L.map(([w,i])=>`<div class="card" data-w="${i}"><div class="ttl">${esc(w.title_ko||w.title)}</div>${w.title_ko&&w.title_ko!==w.title?`<div class="sub">${esc(w.title)}</div>`:""}
+     <div class="meta">${esc(w.region)} · ${esc(w.src||"")} · ${esc((w.pub||"").slice(5,16))}${w.digest?` · <span class="badge ok">요점 있음</span>`:""}</div>
+     ${w.digest&&w.digest.points&&w.digest.points[0]?`<div class="sub" style="margin-top:4px">• ${esc(w.digest.points[0]).slice(0,120)}</div>`:""}
+     ${(w.flags||[]).length?`<div class="flag">⚠ ${w.flags.map(esc).join(" / ")}</div>`:""}</div>`).join("")||`<div class="empty">해외 뉴스가 없습니다.</div>`}`;
 }
 function topicSheet(t){
   const own=!t; t=t||{id:"",title:"",category:"점주계산",format:"카드",angle:"",url:"",src:"직접 입력",flags:[]};
@@ -398,6 +434,7 @@ function topicSheet(t){
    `${t.title_ko&&t.title_ko!==t.title?`<div class="sub">${esc(t.title)}</div>`:""}<div class="meta">${esc(t.src)} · ${esc(t.pub||"")}</div>
     ${d?`<div class="card" style="margin-top:10px">${d.desc_ko?`<div style="font-size:14px">${esc(d.desc_ko)}</div>`:""}
       ${d.points&&d.points.length?`<ol class="pts">${d.points.map(p=>`<li>${esc(p)}</li>`).join("")}</ol>`:""}
+      ${d.body&&d.body.length?`<details><summary>본문 앞부분 번역 (${d.body.length}문단)</summary>${d.body.map(p=>`<p style="font-size:13.5px;margin:6px 0">${esc(p)}</p>`).join("")}</details>`:""}
       <div class="sub">자동 번역·본문 발췌 — 숫자는 원문 확인${d.warn?" · ⚠ "+esc(d.warn):""}</div></div>`:`<div class="sub" style="margin-top:8px">요점은 맥이 미리 만든 기사만 보입니다.</div>`}
     ${t.url?`<a class="btn sm" href="${esc((d&&d.url)||t.url)}" target="_blank" rel="noopener">원문 기사 열기 ↗</a>`:""}
     ${t.flags&&t.flags.length?`<div class="flag">⚠ ${t.flags.map(esc).join("<br>⚠ ")}</div>`:""}`}
