@@ -306,10 +306,11 @@ function vWorkflow(){
   if(w.loading){$("#main").innerHTML=`<div class="alert warn">${esc(w.summary.message)}</div>`;return}
   const s=w.summary||{}, labels={proposed:"미리보기·승인 대기",review:"검토 필요",needs_production:"제작 필요",needs_material:"새 자료 필요",blocked:"중복 차단",clear:"중복 신호 없음",unknown:"확인 부족",stale:"날짜·출처 재확인",held:"보류",incomplete:"제작 미완료",ready:"미리보기 가능"};
   const badge=x=>`<span class="badge ${x==="blocked"?"fail":x==="clear"||x==="proposed"?"ok":"warn"}">${esc(labels[x]||x)}</span>`;
-  const review=(w.candidates||[]).filter(c=>c.duplicate_audit.status!=="clear");
+  const review=(w.candidates||[]).filter(c=>c.duplicate_audit.status!=="clear"&&!["held","unavailable","stale"].includes(c.eligibility.status));
   $("#main").innerHTML=`<h2>승인 후 직접 발행</h2><div class="card"><div class="ttl">이력·사진 확인 → 중복 검토 → 미리보기 → 승인 → 발행 → 실제 게시물 확인</div>
     <p class="sub">이 채팅이나 발행실에서 회차를 승인하면 게시합니다. 카드·영상·캡션이 바뀌면 승인을 다시 받습니다. 텔레그램 미리보기도 이용할 수 있습니다.</p>
-    <div class="meta">비교 이력 ${s.history_count||0}건 · 미게시 ${s.candidate_count||0}개 · 중복 차단 ${s.blocked_count||0}개</div><div class="meta">이력 확인 ${esc(s.history_cache_at||"미확인")}</div>
+    <div class="meta">인스타 ${s.api_cache_history_count||0}건 · 별도 로컬 기록 ${s.local_only_history_count||0}건 · 제안 ${s.planned_count||0}개</div><div class="meta">이력 확인 ${esc(s.history_cache_at||"미확인")}</div>
+    ${s.cloud_only_record_count?`<p class="sub">OneDrive에만 있는 과거 회차 ${s.cloud_only_record_count}개는 일부 확인 대기입니다. 미확인 사진을 중복 없음으로 판단하지 않습니다.</p>`:""}
     <button class="btn sm" id="wfSync" style="margin-top:8px">실제 게시 이력 다시 확인</button></div>
     <h2>앞으로 2주 제안</h2><p class="sub">승인 전에는 올라가지 않습니다. 거래처 사진 우선, 같은 카테고리 14일 간격으로 검토합니다.</p>
     ${(w.plan||[]).map(p=>`<div class="card"><div class="meta">${esc(dlabel(p.date))} · ${esc(p.date)}</div><div class="ttl">${esc(p.title)}</div><div class="chips">${badge(p.status)}${p.category?`<span class="badge">${esc(p.category)}</span>`:""}</div>
