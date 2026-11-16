@@ -39,7 +39,7 @@ a{color:var(--accent)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:1px;background:var(--wait)}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.fail{background:var(--fail)}
 main{padding:12px 16px calc(84px + env(safe-area-inset-bottom));max-width:720px;margin:0 auto}
-nav.bot{position:fixed;left:0;right:0;bottom:0;z-index:6;display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav.bot{position:fixed;left:0;right:0;bottom:0;z-index:6;display:grid;grid-template-columns:repeat(5,1fr);background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
 nav.bot button{border:0;background:none;padding:9px 0 8px;font-size:12px;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px}
 nav.bot button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
 nav.bot button.on{color:var(--accent);font-weight:600}
@@ -267,7 +267,7 @@ async function load(quiet){
 function start(){
   $("#app").innerHTML=`<div class="top"><h1><img src="icons/icon-192.png" alt="">세왕 발행실<span style="flex:1"></span><button class="btn sm" id="rf">새로고침</button></h1><div class="st" id="stl"></div></div>
   <main id="main"><div class="empty">불러오는 중…</div></main>
-  <nav class="bot">${[["today","오늘",'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],["cal","일정",'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'],["topics","소재",'<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z"/>'],["photo","사진 보내기",'<rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/>']].map(([k,l,i])=>`<button data-tab="${k}" class="${TAB===k?"on":""}"><svg viewBox="0 0 24 24">${i}</svg>${l}</button>`).join("")}</nav>`;
+  <nav class="bot">${[["today","오늘",'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],["workflow","계획",'<path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/>'],["cal","일정",'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'],["topics","소재",'<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z"/>'],["photo","사진 보내기",'<rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/>']].map(([k,l,i])=>`<button data-tab="${k}" class="${TAB===k?"on":""}"><svg viewBox="0 0 24 24">${i}</svg>${l}</button>`).join("")}</nav>`;
   $$("nav.bot button").forEach(b=>b.onclick=()=>{TAB=b.dataset.tab;LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x===b));render();window.scrollTo(0,0)});
   $("#rf").onclick=()=>load();
   load(); setInterval(()=>{if(!$("#sheet").classList.contains("open")&&document.visibilityState==="visible")load(true)},90000);
@@ -296,8 +296,28 @@ function render(){
   if(!$("#main")) return;
   statusLine();
   if(!S){$("#main").innerHTML=`<div class="alert warn">${esc(LASTERR||"불러오는 중…")}</div>`;return}
-  ({today:vToday,cal:vCal,topics:vTopics,photo:vPhoto}[TAB]||vToday)();
+  ({today:vToday,workflow:vWorkflow,cal:vCal,topics:vTopics,photo:vPhoto}[TAB]||vToday)();
   hydrate($("#main"));
+}
+
+function vWorkflow(){
+  const w=S.workflow;
+  if(!w){$("#main").innerHTML='<div class="alert warn">맥에서 새 발행계획을 동기화하는 중입니다. 잠시 후 새로고침해 주세요.</div>';return}
+  const s=w.summary||{}, labels={proposed:"미리보기·승인 대기",review:"검토 필요",needs_production:"제작 필요",needs_material:"새 자료 필요",blocked:"중복 차단",clear:"중복 신호 없음",unknown:"확인 부족",stale:"날짜·출처 재확인",held:"보류",incomplete:"제작 미완료",ready:"미리보기 가능"};
+  const badge=x=>`<span class="badge ${x==="blocked"?"fail":x==="clear"||x==="proposed"?"ok":"warn"}">${esc(labels[x]||x)}</span>`;
+  const review=(w.candidates||[]).filter(c=>c.duplicate_audit.status!=="clear");
+  $("#main").innerHTML=`<h2>승인 후 직접 발행</h2><div class="card"><div class="ttl">이력·사진 확인 → 중복 검토 → 미리보기 → 승인 → 발행 → 실제 게시물 확인</div>
+    <p class="sub">이 채팅이나 발행실에서 회차를 승인하면 게시합니다. 카드·영상·캡션이 바뀌면 승인을 다시 받습니다. 텔레그램 미리보기도 이용할 수 있습니다.</p>
+    <div class="meta">비교 이력 ${s.history_count||0}건 · 미게시 ${s.candidate_count||0}개 · 중복 차단 ${s.blocked_count||0}개</div><div class="meta">이력 확인 ${esc(s.history_cache_at||"미확인")}</div>
+    <button class="btn sm" id="wfSync" style="margin-top:8px">실제 게시 이력 다시 확인</button></div>
+    <h2>앞으로 2주 제안</h2><p class="sub">승인 전에는 올라가지 않습니다. 거래처 사진 우선, 같은 카테고리 14일 간격으로 검토합니다.</p>
+    ${(w.plan||[]).map(p=>`<div class="card"><div class="meta">${esc(dlabel(p.date))} · ${esc(p.date)}</div><div class="ttl">${esc(p.title)}</div><div class="chips">${badge(p.status)}${p.category?`<span class="badge">${esc(p.category)}</span>`:""}</div>
+      <p class="sub">${esc(p.reason)}${(p.notes||[]).length?"<br>"+p.notes.map(esc).join(" · "):""}</p>${p.rel?`<button class="btn sm" data-open="${esc(p.rel)}">미리보기</button>`:""}</div>`).join("")}
+    <h2>중복·재확인 ${review.length}개</h2>${review.slice(0,25).map(c=>`<details class="card"><summary>${badge(c.duplicate_audit.status)} ${esc(c.title)}</summary><p class="sub">${esc(c.rel)} · ${esc(labels[c.eligibility.status]||c.eligibility.status)}</p>
+      ${(c.duplicate_audit.matches||[]).slice(0,5).map(m=>`<div class="alert ${m.severity==="blocked"?"fail":"warn"}">${esc(m.message)}${m.similarity!=null?` · ${Math.round(m.similarity*100)}%`:""}<br>${esc(m.date||"")} ${esc(m.title||m.folder||"")}${m.permalink?`<br><a href="${esc(m.permalink)}" target="_blank" rel="noopener">기존 게시물 보기</a>`:""}</div>`).join("")}
+      ${(c.duplicate_audit.warnings||[]).map(x=>`<p class="sub">${esc(x)}</p>`).join("")}<button class="btn sm" data-open="${esc(c.rel)}">회차 확인</button></details>`).join("")}`;
+  bind();
+  $("#wfSync").onclick=()=>send("sync_history",{},"실제 게시 이력 확인").catch(e=>toast(e.message));
 }
 
 // ── 오늘 ──
@@ -475,7 +495,7 @@ function reqSheet(r){
 
 // ── 회차 상세 ──
 function detailOf(rel){const n=rel.split("/").pop();return (S.details||{})[n]}
-function epOf(rel){for(const d of S.days){if(d.ep&&d.ep.rel===rel)return [d,d.ep]}const u=(S.unscheduled||[]).find(x=>x.rel===rel);return [null,u]}
+function epOf(rel){for(const d of S.days){if(d.ep&&d.ep.rel===rel)return [d,d.ep]}const u=(S.unscheduled||[]).find(x=>x.rel===rel)||(S.workflow&&S.workflow.candidates||[]).find(x=>x.rel===rel);return [null,u]}
 function openEp(rel){
   const det=detailOf(rel), [d,e]=epOf(rel);
   const title=(e&&(e.hook||e.title))||rel;
@@ -520,7 +540,9 @@ function openEp(rel){
   $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");$("#eRev").value=""}catch(e){toast(e.message)}};
   if($("#ePub")&&chk.verdict!=="fail") armTwice($("#ePub"),"한 번 더 누르면 인스타에 게시됩니다",async()=>{
     if(warnOnly&&!$("#eW").checked){toast("주의 항목 확인 체크를 해 주세요");return false}
-    try{await send("publish",{folder:rel,allow_warn:warnOnly},"게시: "+title.slice(0,20));closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message)}});
+    if(!det.publication_preview||!det.publication_preview.fingerprint){toast("새 미리보기가 동기화된 뒤 승인해 주세요");return false}
+    if(cap.value!==(det.caption||"")){toast("캡션을 먼저 저장하고 새 미리보기를 확인해 주세요");return false}
+    try{await send("publish",{folder:rel,allow_warn:warnOnly,fingerprint:det.publication_preview.fingerprint},"게시: "+title.slice(0,20));closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message)}});
 }
 
 // ── 사진 보내기 ──
