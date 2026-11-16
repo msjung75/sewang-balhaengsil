@@ -303,6 +303,7 @@ function render(){
 function vWorkflow(){
   const w=S.workflow;
   if(!w){$("#main").innerHTML='<div class="alert warn">맥에서 새 발행계획을 동기화하는 중입니다. 잠시 후 새로고침해 주세요.</div>';return}
+  if(w.loading){$("#main").innerHTML=`<div class="alert warn">${esc(w.summary.message)}</div>`;return}
   const s=w.summary||{}, labels={proposed:"미리보기·승인 대기",review:"검토 필요",needs_production:"제작 필요",needs_material:"새 자료 필요",blocked:"중복 차단",clear:"중복 신호 없음",unknown:"확인 부족",stale:"날짜·출처 재확인",held:"보류",incomplete:"제작 미완료",ready:"미리보기 가능"};
   const badge=x=>`<span class="badge ${x==="blocked"?"fail":x==="clear"||x==="proposed"?"ok":"warn"}">${esc(labels[x]||x)}</span>`;
   const review=(w.candidates||[]).filter(c=>c.duplicate_audit.status!=="clear");
