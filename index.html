@@ -394,7 +394,7 @@ function vCal(){
     if(e){body=`<div class="row" data-open="${esc(e.rel)}">${TH(e.thumb)}<div class="grow"><div class="ttl">${esc(e.hook||e.title)}</div>
       <div class="meta">${kindBadge(e.kind)}<span class="badge">${esc(e.category)}</span>${e.posted?`<span class="badge ok">게시됨</span>${e.posted.story==="ok"?`<span class="badge ok">스토리</span>`:e.posted.story==="fail"?`<span class="badge fail">스토리 실패</span>`:""}`:d.day>=S.today?`<span class="badge wait">예약</span>`:`<span class="badge fail">미게시</span>`}</div></div></div>`}
     const reqs=(d.reqs||[]).filter(r=>!e);
-    body+=reqs.map(r=>`<div class="ttl" style="font-weight:500">📝 ${esc(r.title)}</div><div class="meta"><span class="badge ${r.status==="made"?"ok":"warn"}">${r.status==="made"?"제작됨":"자료 만드는 중(06:30)"}</span>${kindBadge(r.format)}</div>`).join("");
+    body+=reqs.map(r=>`<div class="ttl" style="font-weight:500">📝 ${esc(r.title)}</div><div class="meta"><span class="badge ${r.status==="made"?"ok":"warn"}">${r.status==="made"?"제작됨":"제작 요청 대기"}</span>${kindBadge(r.format)}</div>`).join("");
     const igs=(d.ig||[]).filter(g=>!(e&&e.posted&&g.permalink&&e.posted.permalink&&g.permalink.replace(/\/$/,"")===e.posted.permalink.replace(/\/$/,"")));
     body+=igs.map(g=>`<div class="meta" style="margin-top:6px">📷 <a href="${esc(g.permalink)}" target="_blank" rel="noopener">${esc(g.cap||g.type)}</a> · 저장 ${g.saved??"-"} · 공유 ${g.shares??"-"}${g.folder?"":" <span class='badge'>앱 밖에서 올림</span>"}</div>`).join("");
     if(!body) body=d.day>S.today?`<div class="empty">비어 있음</div><div class="acts" style="margin-top:6px"><button class="btn sm" data-pick="${d.day}">소재 고르기</button></div>`:`<div class="empty">게시 없음</div>`;
@@ -488,9 +488,9 @@ function topicSheet(t){
    <label class="grow">포맷<select id="tF"><option ${t.format==="릴스"?"selected":""}>릴스</option><option ${t.format!=="릴스"?"selected":""}>카드</option></select></label></div>
    <label>이렇게 만들어 주세요 (각도)<textarea id="tA" style="min-height:64px">${esc(t.angle||"")}</textarea></label>
    <label>메모 — 넣을 것·뺄 것·참고 매장<textarea id="tN" style="min-height:64px"></textarea></label>
-   <label class="chk" style="margin-top:12px"><input type="checkbox" id="tU"> 급함 — 아침까지 기다리지 않고 먼저</label>
+   <label class="chk" style="margin-top:12px"><input type="checkbox" id="tU"> 우선 제작 요청</label>
    <div class="acts"><button class="btn primary block" id="tGo">📸 인스타 자료 만들기</button>${own?"":`<button class="btn sm" id="tX">후보에서 빼기</button>`}${!own&&t.url?`<button class="btn sm" id="tDeep">🔎 Claude 심층 분석 요청</button>`:""}</div>
-   <p class="sub">다음 06:30 초안 작업이 카드·릴스·캡션을 만들고, 07:45 텔레그램 미리보기가 옵니다. 그다음 「오늘」에서 보고 승인하면 게시됩니다.</p>`);
+   <p class="sub">제작 요청을 보냅니다. 완성된 카드·릴스·캡션은 ‘오늘’ 또는 ‘일정’에서 확인하고 승인한 뒤 게시합니다.</p>`);
   $("#tGo").onclick=async()=>{
     const title=own?$("#tT").value.trim():t.title; if(!title) return toast("주제를 적어 주세요");
     $("#tGo").disabled=true;
@@ -533,12 +533,12 @@ function openEp(rel){
   openSheet(title,`
    ${det.video?`<video controls playsinline preload="metadata" data-m="${esc(det.video)}" poster=""></video><div class="sub">미리보기 화질(480p) — 실제 게시는 원본</div>`:""}
    ${!det.video&&det.cards.length?`<div class="strip">${det.cards.map(k=>`<img data-m="${esc(k)}" alt="">`).join("")}</div><div class="sub">카드 ${det.cards.length}장 — 옆으로 넘기기</div>`:""}
-   ${det.draft?`<video controls playsinline preload="metadata" data-m="${esc(det.draft)}"></video><div class="alert info" style="margin-top:6px">📷 넣은 사진으로 맥이 자동으로 이어 붙인 <b>미리보기 초안</b>입니다(소리·자막 없음). 아침 06:30 Claude가 글자·음악·캡션을 넣어 완성본을 만듭니다. 순서·뺄 사진은 아래 「수정 요청」에 적어 주세요.</div>`:""}
-   ${!det.draft&&det.raw_n&&!det.video&&!det.cards.length?`<div class="alert warn">${det.draft_state==="만드는 중"?"⏳ 미리보기 초안 만드는 중 (1~2분)":det.draft_state==="실패"?"미리보기 초안을 못 만들었습니다(맥 ffmpeg 확인) — 사진은 아래에서 보세요":"⏳ 미리보기 초안 대기 중"}</div>`:""}
+   ${det.draft?`<video controls playsinline preload="metadata" data-m="${esc(det.draft)}"></video><div class="alert info" style="margin-top:6px">📷 등록한 사진을 이어 붙인 <b>미리보기 초안</b>입니다(소리·자막 없음). 글자·음악·캡션이 들어간 완성본 제작은 다음 단계입니다. 순서나 뺄 사진은 아래 ‘수정 요청’에 적어 주세요.</div>`:""}
+   ${!det.draft&&det.raw_n&&!det.video&&!det.cards.length?`<div class="alert warn">${det.draft_state==="만드는 중"?"⏳ 미리보기 초안 만드는 중 (1~2분)":det.draft_state==="실패"?"미리보기 초안을 만들지 못했습니다. 아래 원본 사진을 확인하고 수정 요청을 보내 주세요":"⏳ 미리보기 초안 대기 중"}</div>`:""}
    ${det.raw&&det.raw.length?`<h2>넣은 사진 ${det.raw_n}장</h2><div class="strip">${det.raw.map(k=>`<img data-m="${esc(k)}" alt="" style="height:220px">`).join("")}</div>`:""}
    ${det.raw_videos&&det.raw_videos.length?`<h2>넣은 영상 ${det.raw_video_n||det.raw_videos.length}개</h2>${det.raw_videos.map(k=>`<video controls playsinline preload="metadata" data-m="${esc(k)}"></video>`).join("")}<p class="sub">등록한 원본의 확인용 영상입니다. 편집 완성본이 준비되면 위에 표시됩니다.</p>`:""}
-   ${!det.draft&&!det.raw_n&&!det.raw_video_n&&!det.video&&!det.cards.length&&det.thumb?`<img class="th" style="width:100%;height:auto;max-height:70vh;object-fit:contain" data-m="${esc(det.thumb)}" alt=""><div class="sub">영상 미리보기를 만드는 중이거나(맥 ffmpeg 필요) 표지만 있습니다</div>`:""}
-   ${!det.draft&&!det.raw_n&&!det.raw_video_n&&!det.video&&!det.cards.length&&!det.thumb?`<div class="alert warn">아직 카드·영상이 없습니다 — 아침 초안 작업 전이거나 제작 대기</div>`:""}
+   ${!det.draft&&!det.raw_n&&!det.raw_video_n&&!det.video&&!det.cards.length&&det.thumb?`<img class="th" style="width:100%;height:auto;max-height:70vh;object-fit:contain" data-m="${esc(det.thumb)}" alt=""><div class="sub">표지만 준비되어 있습니다. 완성본이 준비되면 미리보기를 다시 열어 주세요.</div>`:""}
+   ${!det.draft&&!det.raw_n&&!det.raw_video_n&&!det.video&&!det.cards.length&&!det.thumb?`<div class="alert warn">카드·영상 제작 대기 중입니다.</div>`:""}
    ${d?`<div class="meta" style="margin-top:8px">${dlabel(d.day)} ${d.day.slice(5)} 예약 · ${kindBadge(e.kind)}<span class="badge">${esc(e.category)}</span></div>`:`<div class="meta">날짜 미정</div>`}
    <h2>게시 전 점검 <span class="badge ${chk.verdict}">${LV[chk.verdict]}</span></h2>
    <div class="checks">${chk.items.map(i=>`<div><b class="lv-${i.level}">${esc(i.item)}</b><span>${esc(i.msg)}</span></div>`).join("")}</div>
