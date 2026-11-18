@@ -281,3 +281,100 @@ test('failed production can be retried without any publication command', async (
   assert.deepEqual(plain(h.context.__calls[0].slice(0, 2)), ['produce', { folder: 'episodes/test' }]);
   assert.equal(button.disabled, true); assert.equal(h.context.__calls.length, 1);
 });
+
+function historyFixture() {
+  const state = fixture();
+  const items = Array.from({length:243}, (_,i) => {
+    const day = i===242?'2026-05-19':new Date(Date.UTC(2026,10,19-Math.floor(i*184/242))).toISOString().slice(0,10);
+    return {id:'post-'+i,media_id:String(18000000000000000n+BigInt(i)),title:i<2?'같은 제목':'기존 게시물 '+i,
+      caption:i===242?'오래된 본문의 숨겨진검색어 전체 캡션':'지점 운영 메모 '+i,date:day,month:day.slice(0,7),published_at:day+'T03:00:00+0000',
+      kind:i%3===0?'REELS':i%3===1?'CAROUSEL_ALBUM':'IMAGE',status:'api_verified',category:'가게운영',origin:'instagram_only',
+      permalink:'https://www.instagram.com/p/fixture'+i+'/',media_count:null,metrics:{views:null,likes:i===0?0:null,saved:null}};
+  });
+  for(let i=0;i<3;i++)items.push({id:'local-'+i,title:'로컬 기록 '+i,caption:'별도 로컬 캡션 '+i,date:'2026-07-2'+i,month:'2026-07',kind:i===0?'카드':'릴스',status:'local_only',origin:'local_only',metrics:{}});
+  items.push({id:'unconfirmed',title:'',caption:'',date:'unknown',kind:'CAROUSEL_ALBUM',status:'api_unconfirmed',permalink:'javascript:alert(1)',media_count:null,metrics:{}});
+  state.published_history={items,summary:{api_count:243,local_only_count:3,api_unconfirmed_count:1,total:247,complete:true,synced_at:'2026-11-19T08:44:00+09:00',oldest:'2026-05-19',newest:'2026-11-19'}};
+  return state;
+}
+function showHistory(h) {
+  h.context.__historyState=historyFixture();
+  h.run('S=__historyState;TAB="cal";CALF="past";vCal()');
+}
+
+test('all 243 confirmed posts are searchable beyond the calendar and pagination limit', () => {
+  const h=harness();showHistory(h);
+  assert.equal(h.run('filteredHistory().length'),243);
+  assert.equal(h.document.querySelectorAll('[data-history]').length,50);
+  assert.match(h.el('hSummary').innerHTML,/인스타 확인 243개/);
+  assert.match(h.el('hSummary').innerHTML,/로컬 기록 3개 별도/);
+  h.el('hMore').onclick();
+  assert.equal(h.document.querySelectorAll('[data-history]').length,100);
+  h.el('hQuery').value='숨겨진검색어';h.el('hQuery').oninput({target:h.el('hQuery')});
+  assert.equal(h.run('HISTORY_FILTER.limit'),50);
+  assert.equal(h.run('filteredHistory().length'),1);
+  assert.equal(h.document.querySelectorAll('[data-history]')[0].dataset.history,'post-242');
+  assert.match(h.el('hRows').innerHTML,/2026-05-19/);
+  assert.equal(h.el('hMonth').options.some(o=>o.value==='2026-05'),true);
+});
+
+test('month, normalized kind, status and caption search combine with accurate counts', () => {
+  const h=harness();showHistory(h);
+  h.el('hStatus').value='local_only';h.el('hStatus').onchange({target:h.el('hStatus')});
+  assert.equal(h.run('filteredHistory().length'),3);
+  h.el('hMonth').value='2026-07';h.el('hMonth').onchange({target:h.el('hMonth')});
+  h.el('hKind').value='카드';h.el('hKind').onchange({target:h.el('hKind')});
+  h.el('hQuery').value='로컬 캡션';h.el('hQuery').oninput({target:h.el('hQuery')});
+  assert.equal(h.run('filteredHistory().length'),1);
+  assert.equal(h.document.querySelectorAll('[data-history]')[0].dataset.history,'local-0');
+  assert.equal(h.el('hCount').textContent,'검색 결과 1개 · 1개 표시');
+  h.el('hReset').onclick();
+  assert.equal(h.run('filteredHistory().length'),243);
+  assert.equal(h.run('historyKind({kind:"CAROUSEL_ALBUM"})'),'카드');
+  assert.equal(h.run('historyKind({kind:"REELS"})'),'릴스');
+});
+
+test('published history detail is read only even when a matching unposted folder has approval data', () => {
+  const h=harness();showHistory(h);h.context.__sent=[];
+  h.run('send=async(...args)=>__sent.push(args);S.published_history.items[0].rel="same-folder";S.details["same-folder"]={cards:["x"],caption:"다른 초안",publication_preview:{fingerprint:"draft"}};S.published_history.items[0].media=[{type:"IMAGE",media_url:"https://cdn.example/one.jpg"},{type:"VIDEO",media_url:"https://cdn.example/two.mp4",thumbnail_url:"https://cdn.example/two.jpg"}];openEp=()=>{throw new Error("Published history must not open approval editor")};openPublishedHistory("post-0")');
+  assert.equal(h.el('historyCaption').textContent,'지점 운영 메모 0');
+  for(const id of ['ePub','eChecked','eSave','eRevGo','eProduce'])assert.equal(h.el(id),null);
+  assert.equal(h.el('shB').querySelectorAll('[data-produce]').length,0);
+  assert.equal(h.el('shB').querySelectorAll('video')[0].attrs.preload,'none');
+  assert.match(h.el('shB').innerHTML,/href="https:\/\/www.instagram.com\/p\/fixture0\//);
+  assert.match(h.el('shB').innerHTML,/<b>좋아요<\/b><span>0<\/span>/);
+  assert.match(h.el('shB').innerHTML,/<b>조회<\/b><span>미집계<\/span>/);
+  assert.equal(h.context.__sent.length,0);
+});
+
+test('unknown media count, missing caption and unconfirmed records are never presented as verified zeros', () => {
+  const h=harness();showHistory(h);
+  h.run('openPublishedHistory("unconfirmed")');
+  assert.match(h.el('shB').innerHTML,/현재 인스타 확인 대기/);
+  assert.match(h.el('shB').innerHTML,/개수 미확인/);
+  assert.match(h.el('shB').innerHTML,/날짜|게시일 미확인/);
+  assert.equal(h.el('historyCaption').textContent,'(캡션 없음)');
+  assert.equal(h.el('shB').querySelectorAll('a').length,0);
+  assert.equal(h.run('historyMetric(0)'),'0');
+  assert.equal(h.run('historyMetric(null)'),'미집계');
+  assert.equal(h.run('historyMetric(undefined)'),'미집계');
+});
+
+test('quiet history refresh preserves the search input node and text while updating results', async () => {
+  const h=harness();showHistory(h);
+  const input=h.el('hQuery');input.value='숨겨진검색어';input.oninput({target:input});
+  h.context.__fresh=historyFixture();h.context.__fresh.at='2026-11-19 09:00';h.context.__fresh.published_history.items[0].caption='추가된 숨겨진검색어';
+  h.run('ghRaw=async path=>path==="d/state.bin"?TE.encode(JSON.stringify(__fresh)):null;dec=async b=>b;unpack=async b=>b;load=__originalLoad');
+  await h.run('load(true)');
+  assert.equal(h.el('hQuery'),input);
+  assert.equal(input.value,'숨겨진검색어');
+  assert.equal(h.run('S.at'),'2026-11-19 09:00');
+  assert.equal(h.el('hCount').textContent,'검색 결과 2개 · 2개 표시');
+});
+
+test('today history shortcut opens the full confirmed archive without losing older records', () => {
+  const h=harness();h.context.__historyState=historyFixture();h.run('S=__historyState;TAB="today";render()');
+  assert.match(h.el('goHistory').textContent,/인스타 243개/);
+  h.el('goHistory').onclick();
+  assert.equal(h.run('TAB'),'cal');assert.equal(h.run('CALF'),'past');
+  assert.equal(h.run('filteredHistory().length'),243);
+});
