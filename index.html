@@ -344,6 +344,32 @@ function vWorkflow(){
 }
 
 // ── 오늘 ──
+let REVIEWF=LS.get("sw-review-filter","all");
+const PRODUCTION_LABELS={queued:"제작 대기",running:"완성본 제작 중",review:"대표님 검토 대기",ready:"대표님 검토 대기",completed:"대표님 검토 대기",failed:"제작 실패",needs_input:"자료·메모 확인 필요",needs_production:"제작 필요",blocked:"점검 후 수정 필요",unavailable:"원본 확인 필요",held:"보류",stale:"날짜·출처 재확인"};
+function productionJob(rel){return (((S||{}).production||{}).jobs||[]).find(j=>(j.rel||j.folder)===rel)||null}
+function productionStatus(rel){const j=productionJob(rel),r=((S||{}).review_queue||[]).find(x=>x.rel===rel);return j&&(j.status||j.state)||r&&r.status||""}
+function productionAllowsReview(rel){const status=productionStatus(rel);return !status||["review","ready","completed"].includes(status)}
+function productionNote(j){return j&&(j.message||j.last_error||j.error||j.note)||""}
+async function requestProduction(rel,button){
+  const label=button&&button.textContent;if(button)button.disabled=true;
+  try{await send("produce",{folder:rel},"완성본 제작: "+rel.split("/").pop().slice(0,28));if(button)button.textContent="제작 요청 보냄";return true}
+  catch(e){toast(e.message);if(button){button.disabled=false;button.textContent=label}return false}
+}
+function reviewGroup(status){return ["review","ready","completed"].includes(status)?"review":["queued","running"].includes(status)?"working":"attention"}
+function reviewBox(){
+  const hasQueue=Array.isArray(S.review_queue),rows=hasQueue?S.review_queue:[],jobs=((S.production||{}).jobs||[]);
+  if(!rows.length&&!jobs.length)return "";
+  const items=hasQueue?rows:jobs.filter(j=>j.rel||j.folder).map(j=>({...j,rel:j.rel||j.folder,title:j.title||j.rel||j.folder}));
+  if(!items.length)return "";
+  const filters=[["all","전체"],["review","검토 대기"],["working","제작 중"],["attention","확인 필요"]];
+  if(!filters.some(([key])=>key===REVIEWF))REVIEWF="all";
+  const statusOf=r=>productionStatus(r.rel)||r.status||"review";
+  const filtered=items.filter(r=>REVIEWF==="all"||reviewGroup(statusOf(r))===REVIEWF);
+  return `<h2>발행 전 검토 <span class="badge">${items.length}개 등록</span></h2>
+    <p class="sub">완성본과 최종 캡션을 확인하고 회차별로 승인하세요. 검토 대기 상태에서는 게시되지 않습니다.</p>
+    <div class="seg">${filters.map(([key,label])=>`<button data-review-filter="${key}" class="${REVIEWF===key?"on":""}">${label} ${key==="all"?items.length:items.filter(r=>reviewGroup(statusOf(r))===key).length}</button>`).join("")}</div>
+    ${filtered.map(r=>{const status=statusOf(r),job=productionJob(r.rel),group=reviewGroup(status),reason=productionNote(job)||r.reason||"";return `<div class="card"><div class="row">${r.thumb?TH(r.thumb):""}<div class="grow"><div class="ttl">${esc(r.title||r.rel)}</div><div class="meta">${kindBadge(r.kind)}${r.category?`<span class="badge">${esc(r.category)}</span>`:""}<span class="badge ${group==="review"?"ok":status==="failed"||status==="blocked"?"fail":"warn"}">${esc(PRODUCTION_LABELS[status]||status)}</span></div>${reason?`<p class="sub" style="margin:6px 0">${esc(reason)}</p>`:""}${r.at?`<div class="meta">${esc(r.at)}</div>`:""}</div></div><div class="acts"><button class="btn sm ${group==="review"?"primary":""}" data-open="${esc(r.rel)}">${group==="review"?"미리보기 · 최종 확인":"자료 · 진행상황"}</button>${["failed","needs_input","needs_production"].includes(status)?`<button class="btn sm" data-produce="${esc(r.rel)}">${status==="failed"?"다시 제작":"완성본 제작 요청"}</button>`:""}</div></div>`}).join("")||`<div class="card empty">이 상태의 회차가 없습니다.</div>`}`;
+}
 function pendBox(){
   const p=pending(), res=(S.results||[]).slice(-6).reverse(), jobs=(S.jobs||[]).filter(j=>j.status==="running");
   if(!p.length&&!res.length&&!jobs.length) return "";
@@ -367,6 +393,7 @@ function pipeCard(p){
 function vToday(){
   const al=(S.alerts||[]);
   $("#main").innerHTML=`${al.map(a=>`<div class="alert ${a.level}">${esc(a.msg)}</div>`).join("")}
+   ${reviewBox()}
    ${S.pipelines.map(pipeCard).join("")}
    ${pendBox()}
    ${S.photos&&S.photos.length?`<div class="alert info">맥 사진함에 ${S.photos.length}장 대기 중 — 「사진 보내기」에서 바로 보내면 사진함을 거치지 않고 회차로 묶입니다.</div>`:""}
@@ -517,20 +544,23 @@ function reqSheet(r){
 }
 
 // ── 회차 상세 ──
-function detailOf(rel){const n=rel.split("/").pop();return (S.details||{})[n]}
-function epOf(rel){for(const d of S.days){if(d.ep&&d.ep.rel===rel)return [d,d.ep]}const u=(S.unscheduled||[]).find(x=>x.rel===rel)||(S.workflow&&S.workflow.candidates||[]).find(x=>x.rel===rel);return [null,u]}
+function detailOf(rel){const n=rel.split("/").pop();return (S.details||{})[rel]||(S.details||{})[n]}
+function epOf(rel){for(const d of S.days){if(d.ep&&d.ep.rel===rel)return [d,d.ep]}const u=(S.review_queue||[]).find(x=>x.rel===rel)||(S.unscheduled||[]).find(x=>x.rel===rel)||(S.workflow&&S.workflow.candidates||[]).find(x=>x.rel===rel);return [null,u]}
 function openEp(rel){
   const det=detailOf(rel), [d,e]=epOf(rel);
-  const title=(e&&(e.hook||e.title))||rel;
+  const title=(e&&(e.hook||e.title))||rel,job=productionJob(rel),production=productionStatus(rel);
+  const productionPanel=production?`<div class="alert ${production==="failed"?"fail":["review","ready","completed"].includes(production)?"ok":"info"}"><b>${esc(PRODUCTION_LABELS[production]||production)}</b>${productionNote(job)?`<br>${esc(productionNote(job))}`:""}</div>${["failed","needs_input","needs_production"].includes(production)?`<button class="btn sm block" style="margin-bottom:10px" id="eProduce">${production==="failed"?"다시 제작":"완성본 제작 요청"}</button>`:""}`:"";
   if(!det){
-    openSheet(title,`${e&&e.thumb?`<img class="th" style="width:100%;height:auto;max-height:60vh;object-fit:contain" data-m="${esc(e.thumb)}">`:""}
-     ${e&&e.posted?`<p>게시됨 ${esc(e.posted.at||"")}</p>${e.posted.permalink?`<a class="btn primary" href="${esc(e.posted.permalink)}" target="_blank" rel="noopener">인스타에서 보기</a>`:""}`:`<p class="sub">이 회차의 상세 자료는 오늘 이후 예약분만 올라옵니다.</p>`}`);
+    openSheet(title,`${productionPanel}${e&&e.thumb?`<img class="th" style="width:100%;height:auto;max-height:60vh;object-fit:contain" data-m="${esc(e.thumb)}">`:""}
+     ${e&&e.posted?`<p>게시됨 ${esc(e.posted.at||"")}</p>${e.posted.permalink?`<a class="btn primary" href="${esc(e.posted.permalink)}" target="_blank" rel="noopener">인스타에서 보기</a>`:""}`:`<p class="sub">상세 자료를 준비하고 있습니다. 원본과 제작 상태를 확인한 뒤 새로고침해 주세요.</p>`}`);
+    if($("#eProduce"))$("#eProduce").onclick=()=>requestProduction(rel,$("#eProduce"));
     hydrate($("#shB")); return;
   }
   const chk=det.check||{items:[],verdict:"ok"}, posted=e&&e.posted;
-  const ready=!!(det.publication_preview&&det.publication_preview.fingerprint&&(det.video||(det.cards||[]).length));
+  const ready=!!(productionAllowsReview(rel)&&det.publication_preview&&det.publication_preview.fingerprint&&(det.video||(det.cards||[]).length)&&String(det.caption||"").trim());
   const warnOnly=chk.verdict==="warn";
   openSheet(title,`
+   ${productionPanel}
    ${det.video?`<video controls playsinline preload="metadata" data-m="${esc(det.video)}" poster=""></video><div class="sub">미리보기 화질(480p) — 실제 게시는 원본</div>`:""}
    ${!det.video&&det.cards.length?`<div class="strip">${det.cards.map(k=>`<img data-m="${esc(k)}" alt="">`).join("")}</div><div class="sub">카드 ${det.cards.length}장 — 옆으로 넘기기</div>`:""}
    ${det.draft?`<video controls playsinline preload="metadata" data-m="${esc(det.draft)}"></video><div class="alert info" style="margin-top:6px">📷 등록한 사진을 이어 붙인 <b>미리보기 초안</b>입니다(소리·자막 없음). 글자·음악·캡션이 들어간 완성본 제작은 다음 단계입니다. 순서나 뺄 사진은 아래 ‘수정 요청’에 적어 주세요.</div>`:""}
@@ -542,13 +572,16 @@ function openEp(rel){
    ${d?`<div class="meta" style="margin-top:8px">${dlabel(d.day)} ${d.day.slice(5)} 예약 · ${kindBadge(e.kind)}<span class="badge">${esc(e.category)}</span></div>`:`<div class="meta">날짜 미정</div>`}
    <h2>게시 전 점검 <span class="badge ${chk.verdict}">${LV[chk.verdict]}</span></h2>
    <div class="checks">${chk.items.map(i=>`<div><b class="lv-${i.level}">${esc(i.item)}</b><span>${esc(i.msg)}</span></div>`).join("")}</div>
-   ${posted?`<div class="alert ok" style="margin-top:12px">이미 게시됨 ${esc(posted.at||"")} ${posted.permalink?`<a href="${esc(posted.permalink)}" target="_blank" rel="noopener">보기</a>`:""}</div>`:`
-   ${warnOnly?`<label class="chk" style="margin-top:12px"><input type="checkbox" id="eW"> 주의 항목 확인했고 이대로 게시</label>`:""}
-   ${!ready?`<div class="alert info" style="margin-top:12px">완성본과 게시 전 점검을 준비하고 있습니다. 자료가 갱신되면 미리보기를 다시 열어 주세요.</div>`:""}
-   <button class="btn primary block" style="margin-top:12px" id="ePub" ${chk.verdict==="fail"||!ready?"disabled":""}>${chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":"✅ 승인하고 지금 게시"}</button>`}
+   ${posted?`<div class="alert ok" style="margin-top:12px">이미 게시됨 ${esc(posted.at||"")} ${posted.permalink?`<a href="${esc(posted.permalink)}" target="_blank" rel="noopener">보기</a>`:""}</div>`:""}
    <button class="btn sm block" style="margin-top:8px" id="eReload">최신 미리보기 다시 열기</button>
    <h2>캡션</h2><textarea class="cap" id="eCap">${esc(det.caption||"")}</textarea>
    <div class="acts"><button class="btn sm" id="eSave">캡션 저장</button><span class="sub" id="eLen"></span></div>
+   ${posted?"":`<h2>발행 전 최종 확인</h2>
+   <p class="sub">위 이미지·영상과 최종 캡션을 확인하세요. 내용을 수정하면 새 미리보기를 다시 확인해야 합니다.</p>
+   ${!ready?`<div class="alert info">완성본과 게시 전 점검을 준비하고 있습니다. 자료가 갱신되면 미리보기를 다시 열어 주세요.</div>`:""}
+   <label class="chk"><input type="checkbox" id="eChecked" ${!ready||chk.verdict==="fail"?"disabled":""}> 영상·이미지와 최종 캡션을 확인했습니다</label>
+   ${warnOnly?`<label class="chk"><input type="checkbox" id="eW"> 주의 항목을 확인했고 이대로 게시합니다</label>`:""}
+   <button class="btn primary block" style="margin-top:12px" id="ePub" disabled>${chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":"내용 확인 후 승인 가능"}</button>`}
    <h2>바꾸기</h2>
    <label>게시 날짜<select id="eD">${dayOpts(d?d.day:"")}</select></label>
    ${d&&!posted?`<button class="btn sm block" style="margin-top:10px" id="eSwap">🔁 이 날 다른 주제로 바꾸기</button>`:""}
@@ -559,18 +592,29 @@ function openEp(rel){
    ${det.sources?`<details><summary>검증·출처</summary><pre class="src">${esc(det.sources)}</pre></details>`:""}
    ${det.request?`<details><summary>제작 요청 메모</summary><pre class="src">${esc(det.request)}</pre></details>`:""}`);
   hydrate($("#shB"));
-  const cap=$("#eCap"), upd=()=>{const t=cap.value,n=(t.match(/#[^\s#]+/g)||[]).length;$("#eLen").textContent=`${t.length}자 · 해시태그 ${n}개${n<3||n>5?" ⚠ 3~5개":""}`};cap.oninput=upd;upd();
+  const cap=$("#eCap"),pub=$("#ePub"),confirmed=$("#eChecked");let disarmPublish=()=>{},captionPending=false;
+  const canApprove=()=>ready&&chk.verdict!=="fail"&&!captionPending&&confirmed&&confirmed.checked&&(!warnOnly||$("#eW").checked)&&cap.value===(det.caption||"");
+  const syncApproval=()=>{if(!pub)return;pub.disabled=!canApprove();pub.textContent=chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":captionPending?"캡션 반영 후 미리보기를 다시 열어 주세요":canApprove()?"✅ 승인하고 지금 게시":"내용 확인 후 승인 가능"};
+  const upd=()=>{const t=cap.value,n=(t.match(/#[^\s#]+/g)||[]).length;$("#eLen").textContent=`${t.length}자 · 해시태그 ${n}개${n<3||n>5?" ⚠ 3~5개":""}`};
+  cap.oninput=()=>{upd();if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()};upd();
+  if(confirmed)confirmed.onchange=()=>{disarmPublish();syncApproval()};
+  if($("#eW"))$("#eW").onchange=()=>{disarmPublish();syncApproval()};
+  if($("#eProduce"))$("#eProduce").onclick=()=>requestProduction(rel,$("#eProduce"));
   $("#eReload").onclick=async()=>{const b=$("#eReload");b.disabled=true;try{await load(true);if(!LASTERR)openEp(rel);else toast(LASTERR)}finally{if(b.isConnected)b.disabled=false}};
-  $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장");if($("#ePub")){$("#ePub").disabled=true;$("#ePub").textContent="캡션 반영 후 미리보기를 다시 열어 주세요"}}catch(e){toast(e.message)}};
+  $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()}catch(e){toast(e.message)}};
   $("#eDate").onclick=async()=>{const v=$("#eD").value;if(!v)return;try{await send("schedule",{date:v,folder:rel},"날짜 → "+v.slice(5))}catch(e){toast(e.message)}};
   if($("#eSwap")) $("#eSwap").onclick=()=>{SWAPDAY=d.day;PREDATE=null;closeSheet();TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)};
   $("#ePrev").onclick=async()=>{try{await send("preview",{folder:rel},"미리보기 재발송")}catch(e){toast(e.message)}};
   $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");$("#eRev").value=""}catch(e){toast(e.message)}};
-  if($("#ePub")&&chk.verdict!=="fail"&&ready) armTwice($("#ePub"),"한 번 더 누르면 인스타에 게시됩니다",async()=>{
+  if(pub&&chk.verdict!=="fail"&&ready){pub._sync=syncApproval;disarmPublish=armTwice(pub,"한 번 더 누르면 인스타에 게시됩니다",async()=>{
+    if(!confirmed.checked){toast("이미지·영상과 최종 캡션 확인을 체크해 주세요");return false}
     if(warnOnly&&!$("#eW").checked){toast("주의 항목 확인 체크를 해 주세요");return false}
     if(!det.publication_preview||!det.publication_preview.fingerprint){toast("새 미리보기가 동기화된 뒤 승인해 주세요");return false}
     if(cap.value!==(det.caption||"")){toast("캡션을 먼저 저장하고 새 미리보기를 확인해 주세요");return false}
-    try{await send("publish",{folder:rel,allow_warn:warnOnly,fingerprint:det.publication_preview.fingerprint},"게시: "+title.slice(0,20));closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message)}});
+    const latest=detailOf(rel),fingerprint=det.publication_preview.fingerprint;
+    if(!productionAllowsReview(rel)||!latest||!latest.publication_preview||latest.publication_preview.fingerprint!==fingerprint){confirmed.checked=false;toast("완성본이 바뀌었습니다. 최신 미리보기를 다시 확인해 주세요");syncApproval();return false}
+    try{await send("publish",{folder:rel,allow_warn:warnOnly,fingerprint,reviewed:true,reviewed_fingerprint:fingerprint},"게시: "+title.slice(0,20));closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message)}})}
+  syncApproval();
 }
 
 // ── 사진 보내기 ──
@@ -578,8 +622,8 @@ let PICK=[];
 function vPhoto(){
   const localPhotos=(S.photos||[]).slice();
   $("#main").innerHTML=`<h2>사진·영상 보내기</h2>
-   <div class="steps"><span class="step ok">1 사진 등록</span><span class="step">2 초안 제작</span><span class="step">3 미리보기·수정</span><span class="step">4 승인·게시</span></div>
-   <p class="sub">사진과 메모를 보내면 맥이 회차를 만듭니다. ‘오늘’ 또는 ‘일정’에서 결과를 열어 미리보기를 확인하고 승인하세요.</p>
+   <div class="steps"><span class="step ok">1 사진 등록</span><span class="step">2 완성본 제작</span><span class="step">3 대표님 검토</span><span class="step">4 승인 후 발행</span></div>
+   <p class="sub">사진과 메모를 보내면 완성본 제작을 요청합니다. ‘오늘 → 발행 전 검토’에서 이미지·영상과 최종 캡션을 확인한 뒤 승인하세요.</p>
    <label class="btn primary block" style="text-align:center;color:#fff;margin-top:10px">사진·영상 고르기<input type="file" id="pf" accept="image/*,video/*" multiple hidden></label>
    <div class="photos" id="pv"></div>
    <div id="pform" ${PICK.length?"":"hidden"}>
@@ -613,7 +657,7 @@ function vPhoto(){
     if(!MSEL.size)return toast("사진을 먼저 골라 주세요");
     $("#mGo").disabled=true;
     try{await send("assign_photos",{photos:[...MSEL],title:t,category:$("#mC").value,format:$("#mF").value,date:$("#mD").value,note:$("#mN").value},"사진함 회차: "+t+" "+MSEL.size+"장");
-      MSEL.clear();for(const id of ["mT","mN"])$("#"+id).value="";TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message);if($("#mGo"))$("#mGo").disabled=false}};
+      MSEL.clear();for(const id of ["mT","mN"])$("#"+id).value="";TAB="today";LS.set("sw-tab",TAB);start();toast("사진 등록을 요청했습니다. 완성본이 준비되면 ‘발행 전 검토’에서 확인하세요")}catch(e){toast(e.message);if($("#mGo"))$("#mGo").disabled=false}};
 }
 const PICKURL=new Map();
 function showPick(){
@@ -654,7 +698,7 @@ async function sendPhotos(){
     bar.firstChild.style.width="100%"; msg.textContent="보냈습니다. 맥이 받으면 「오늘」에 결과가 뜹니다.";
     PICK=[];for(const url of PICKURL.values())URL.revokeObjectURL(url);PICKURL.clear();
     for(const id of ["pT","pN"])$("#"+id).value="";
-    savePhotoDraft();UPLOADING=false;TAB="today";LS.set("sw-tab",TAB);start();
+    savePhotoDraft();UPLOADING=false;TAB="today";LS.set("sw-tab",TAB);start();if(!only)toast("사진 등록을 요청했습니다. 완성본이 준비되면 ‘발행 전 검토’에서 확인하세요");
   }catch(e){toast(e.message,6000);msg.textContent="전송하지 못했습니다: "+e.message;b.disabled=false}
   finally{UPLOADING=false;$$("#main input,#main select,#main textarea").forEach(el=>el.disabled=false)}
 }
@@ -663,10 +707,12 @@ async function sendPhotos(){
 function openSheet(t,html){$("#shT").textContent=t;$("#shB").innerHTML=html;$("#sheet").classList.add("open");$("#sbg").classList.add("open");$("#sheet").scrollTop=0}
 function closeSheet(){$("#sheet").classList.remove("open");$("#sbg").classList.remove("open");$$("#shB video").forEach(v=>v.pause());render()}
 $("#shX").onclick=closeSheet;$("#sbg").onclick=closeSheet;
-function armTwice(btn,label,fn){let armed=false,orig=btn.textContent,h;const reset=()=>{armed=false;btn.disabled=false;btn.textContent=orig;btn.classList.remove("danger")};btn.onclick=async()=>{if(btn.disabled)return;if(!armed){armed=true;btn.textContent=label;btn.classList.add("danger");h=setTimeout(reset,5000);return}
-  clearTimeout(h);btn.disabled=true;try{await fn()}catch(e){toast(e.message)}finally{reset()}}}
+function armTwice(btn,label,fn){let armed=false,orig=btn.textContent,h;const reset=()=>{clearTimeout(h);armed=false;btn.disabled=false;btn.textContent=orig;btn.classList.remove("danger");if(btn._sync)btn._sync()};btn.onclick=async()=>{if(btn.disabled)return;if(!armed){armed=true;btn.textContent=label;btn.classList.add("danger");h=setTimeout(reset,5000);return}
+  clearTimeout(h);btn.disabled=true;try{await fn()}catch(e){toast(e.message)}finally{reset()}};return reset}
 function bind(){
   $$("#main [data-open]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();openEp(el.dataset.open)});
+  $$("#main [data-produce]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();requestProduction(el.dataset.produce,el)});
+  $$("#main [data-review-filter]").forEach(el=>el.onclick=()=>{REVIEWF=el.dataset.reviewFilter;LS.set("sw-review-filter",REVIEWF);render()});
   $$("#main [data-pick]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();PREDATE=el.dataset.pick;TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)});
 }
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
