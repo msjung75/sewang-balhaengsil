@@ -130,6 +130,15 @@ const LV={ok:"정상",warn:"주의",fail:"실패",wait:"대기",info:"참고"};
 const TE=new TextEncoder(), TD=new TextDecoder();
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
 let CFG=null, K=null, TOK="", S=null, PING=null, TAB=LS.get("sw-tab","today"), PREDATE=null, SWAPDAY=null, LOADING=false, LASTERR="";
+let refreshTimer=null, UPLOADING=false;
+const photoDraft={values:{},selected:new Set()};
+function savePhotoDraft(){
+  if(!$("#pf"))return;
+  for(const id of ["pT","pC","pF","pD","pN","pO","mT","mC","mF","mD","mN"]){const el=$("#"+id);if(el)photoDraft.values[id]=el.type==="checkbox"?el.checked:el.value}
+}
+function restorePhotoDraft(){
+  for(const [id,value] of Object.entries(photoDraft.values)){const el=$("#"+id);if(!el)continue;if(el.type==="checkbox")el.checked=value;else if(el.tagName!=="SELECT"||[...el.options].some(o=>o.value===value))el.value=value}
+}
 
 function toast(m,ms=3500){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",ms)}
 const b64e=u=>{let s="";for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
@@ -169,17 +178,23 @@ async function unpack(p){
 
 // ── GitHub ──
 const API=()=>CFG.api||"https://api.github.com";
+async function request(url,options={},timeout=45000){
+  const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),timeout);
+  try{return await fetch(url,{...options,signal:controller.signal})}
+  catch(e){if(controller.signal.aborted)throw new Error("연결 시간이 초과되었습니다. 인터넷 연결을 확인하고 다시 시도해 주세요");throw e}
+  finally{clearTimeout(timer)}
+}
 async function ghRaw(path){
-  const r=await fetch(`${API()}/repos/${CFG.repo}/contents/${path}?ref=data&t=${Date.now()}`,{cache:"no-store",
+  const r=await request(`${API()}/repos/${CFG.repo}/contents/${path}?ref=data&t=${Date.now()}`,{cache:"no-store",
     headers:{Authorization:"Bearer "+TOK,Accept:"application/vnd.github.raw","X-GitHub-Api-Version":"2022-11-28"}});
   if(r.status===404) return null;
-  if(!r.ok) throw new Error("GitHub "+r.status+(r.status===401?" — 토큰 만료/취소":""));
+  if(!r.ok) throw new Error("GitHub "+r.status+(r.status===401?" — 연결 토큰이 만료되거나 취소되었습니다. 맥 발행실에서 폰 앱 연결을 갱신해 주세요":""));
   return new Uint8Array(await r.arrayBuffer());
 }
 async function ghPut(path,bytes,msg){
-  const r=await fetch(`${API()}/repos/${CFG.repo}/contents/${path}`,{method:"PUT",
+  const r=await request(`${API()}/repos/${CFG.repo}/contents/${path}`,{method:"PUT",
     headers:{Authorization:"Bearer "+TOK,Accept:"application/vnd.github+json","Content-Type":"application/json","X-GitHub-Api-Version":"2022-11-28"},
-    body:JSON.stringify({message:msg||"폰",content:b64e(bytes),branch:"data"})});
+    body:JSON.stringify({message:msg||"폰",content:b64e(bytes),branch:"data"})},180000);
   if(!r.ok){const t=await r.text().catch(()=>"");throw new Error("올리기 실패 "+r.status+" "+t.slice(0,80))}
 }
 const rid=()=>Date.now()+"_"+hex(crypto.getRandomValues(new Uint8Array(4)));
@@ -191,7 +206,7 @@ async function send(type,body,label,files){
   const cmd={id,ts:Date.now(),type,body:body||{},files:files||[],from:"phone"};
   await ghPut(`inbox/c_${id}.bin`,await enc(cat(new Uint8Array([82]),TE.encode(JSON.stringify(cmd)))),"폰 명령 "+type);
   const p=pending(); p.push({id,label:label||type,at:new Date().toTimeString().slice(0,5)}); LS.set("sw-pend",p.slice(-20));
-  toast("보냈습니다 — 맥이 30초 안에 처리합니다");
+  toast(macAge()!=null&&macAge()<5?"요청을 보냈습니다. 처리 결과는 ‘오늘’에 표시됩니다":"요청을 보관했습니다. 맥이 연결되면 처리됩니다");
   fastPoll();
   return id;
 }
@@ -230,7 +245,7 @@ const TH=k=>k?`<img class="th empty" data-m="${esc(k)}" alt="">`:`<div class="th
 
 // ── 로그인 ──
 async function boot(){
-  try{CFG=await (await fetch("config.json?t="+Date.now(),{cache:"no-store"})).json()}catch(e){$("#app").innerHTML=`<div class="login"><form><h1>설정 파일을 못 읽었습니다</h1><p class="sub">맥 발행실에서 「폰 앱(GitHub)」 연결을 먼저 해 주세요.</p></form></div>`;return}
+  try{const r=await request("config.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("설정 "+r.status);CFG=await r.json()}catch(e){$("#app").innerHTML=`<div class="login"><form><h1>설정 파일을 못 읽었습니다</h1><p class="sub">인터넷 연결을 확인한 뒤 다시 열어 주세요. 계속되면 맥 발행실에서 「폰 앱(GitHub)」 연결을 확인해 주세요.</p><button class="btn primary block" type="button" id="bootRetry">다시 시도</button></form></div>`;$("#bootRetry").onclick=boot;return}
   const saved=LS.get("sw-key",null);
   if(saved&&saved.at===CFG.at&&saved.repo===CFG.repo){
     try{await useBits(unhex(saved.bits));TOK=TD.decode(await dec(b64d(CFG.tok)));return start()}catch(e){LS.del("sw-key")}
@@ -260,19 +275,23 @@ async function load(quiet){
     if(!st){LASTERR="맥이 아직 첫 자료를 올리지 않았습니다(1~3분)"; if(!S) render(); return}
     S=JSON.parse(TD.decode(await unpack(await dec(st))));
     const done=new Set((S.results||[]).map(r=>r.id)); LS.set("sw-pend",pending().filter(p=>!done.has(p.id)));
-    LASTERR=""; render();
+    LASTERR="";
+    if(UPLOADING||(quiet&&$("#pf")&&TAB==="photo")||$("#sheet").classList.contains("open"))statusLine();else render();
   }catch(e){LASTERR=e.message; if(!quiet) toast(e.message); if(String(e.message).includes("비밀번호")) {LS.del("sw-key");loginUI("비밀번호가 바뀌었습니다. 다시 넣어 주세요")} else render()}
   finally{LOADING=false}
 }
 function start(){
+  savePhotoDraft();
+  clearInterval(refreshTimer);
   $("#app").innerHTML=`<div class="top"><h1><img src="icons/icon-192.png" alt="">세왕 발행실<span style="flex:1"></span><button class="btn sm" id="rf">새로고침</button></h1><div class="st" id="stl"></div></div>
   <main id="main"><div class="empty">불러오는 중…</div></main>
   <nav class="bot">${[["today","오늘",'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],["workflow","계획",'<path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/>'],["cal","일정",'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'],["topics","소재",'<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z"/>'],["photo","사진 보내기",'<rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/>']].map(([k,l,i])=>`<button data-tab="${k}" class="${TAB===k?"on":""}"><svg viewBox="0 0 24 24">${i}</svg>${l}</button>`).join("")}</nav>`;
-  $$("nav.bot button").forEach(b=>b.onclick=()=>{TAB=b.dataset.tab;LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x===b));render();window.scrollTo(0,0)});
+  $$("nav.bot button").forEach(b=>b.onclick=()=>{if(UPLOADING)return toast("사진 전송이 끝날 때까지 기다려 주세요");savePhotoDraft();TAB=b.dataset.tab;LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x===b));render();window.scrollTo(0,0)});
   $("#rf").onclick=()=>load();
-  load(); setInterval(()=>{if(!$("#sheet").classList.contains("open")&&document.visibilityState==="visible")load(true)},90000);
-  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")load(true)});
+  render();load(); refreshTimer=setInterval(()=>{if(!$("#sheet").classList.contains("open")&&document.visibilityState==="visible")load(true)},90000);
 }
+document.addEventListener("visibilitychange",()=>{if(K&&$("#main")&&document.visibilityState==="visible")load(true)});
+window.addEventListener("beforeunload",e=>{if(UPLOADING){e.preventDefault();e.returnValue=""}});
 
 // ── 공통 렌더 ──
 function dlabel(d){if(!S)return d;if(d===S.today)return "오늘";if(d===S.tomorrow)return "내일";const x=new Date(d+"T00:00:00");return `${x.getMonth()+1}/${x.getDate()}(${"일월화수목금토"[x.getDay()]})`}
@@ -294,6 +313,8 @@ function dayOpts(cur,auto){return (auto?`<option value="">다음 빈 날 자동<
 
 function render(){
   if(!$("#main")) return;
+  if(UPLOADING){statusLine();return}
+  savePhotoDraft();
   statusLine();
   if(!S){$("#main").innerHTML=`<div class="alert warn">${esc(LASTERR||"불러오는 중…")}</div>`;return}
   ({today:vToday,workflow:vWorkflow,cal:vCal,topics:vTopics,photo:vPhoto}[TAB]||vToday)();
@@ -507,6 +528,7 @@ function openEp(rel){
     hydrate($("#shB")); return;
   }
   const chk=det.check||{items:[],verdict:"ok"}, posted=e&&e.posted;
+  const ready=!!(det.publication_preview&&det.publication_preview.fingerprint&&(det.video||(det.cards||[]).length));
   const warnOnly=chk.verdict==="warn";
   openSheet(title,`
    ${det.video?`<video controls playsinline preload="metadata" data-m="${esc(det.video)}" poster=""></video><div class="sub">미리보기 화질(480p) — 실제 게시는 원본</div>`:""}
@@ -514,14 +536,17 @@ function openEp(rel){
    ${det.draft?`<video controls playsinline preload="metadata" data-m="${esc(det.draft)}"></video><div class="alert info" style="margin-top:6px">📷 넣은 사진으로 맥이 자동으로 이어 붙인 <b>미리보기 초안</b>입니다(소리·자막 없음). 아침 06:30 Claude가 글자·음악·캡션을 넣어 완성본을 만듭니다. 순서·뺄 사진은 아래 「수정 요청」에 적어 주세요.</div>`:""}
    ${!det.draft&&det.raw_n&&!det.video&&!det.cards.length?`<div class="alert warn">${det.draft_state==="만드는 중"?"⏳ 미리보기 초안 만드는 중 (1~2분)":det.draft_state==="실패"?"미리보기 초안을 못 만들었습니다(맥 ffmpeg 확인) — 사진은 아래에서 보세요":"⏳ 미리보기 초안 대기 중"}</div>`:""}
    ${det.raw&&det.raw.length?`<h2>넣은 사진 ${det.raw_n}장</h2><div class="strip">${det.raw.map(k=>`<img data-m="${esc(k)}" alt="" style="height:220px">`).join("")}</div>`:""}
-   ${!det.draft&&!det.raw_n&&!det.video&&!det.cards.length&&det.thumb?`<img class="th" style="width:100%;height:auto;max-height:70vh;object-fit:contain" data-m="${esc(det.thumb)}" alt=""><div class="sub">영상 미리보기를 만드는 중이거나(맥 ffmpeg 필요) 표지만 있습니다</div>`:""}
-   ${!det.draft&&!det.raw_n&&!det.video&&!det.cards.length&&!det.thumb?`<div class="alert warn">아직 카드·영상이 없습니다 — 아침 초안 작업 전이거나 제작 대기</div>`:""}
+   ${det.raw_videos&&det.raw_videos.length?`<h2>넣은 영상 ${det.raw_video_n||det.raw_videos.length}개</h2>${det.raw_videos.map(k=>`<video controls playsinline preload="metadata" data-m="${esc(k)}"></video>`).join("")}<p class="sub">등록한 원본의 확인용 영상입니다. 편집 완성본이 준비되면 위에 표시됩니다.</p>`:""}
+   ${!det.draft&&!det.raw_n&&!det.raw_video_n&&!det.video&&!det.cards.length&&det.thumb?`<img class="th" style="width:100%;height:auto;max-height:70vh;object-fit:contain" data-m="${esc(det.thumb)}" alt=""><div class="sub">영상 미리보기를 만드는 중이거나(맥 ffmpeg 필요) 표지만 있습니다</div>`:""}
+   ${!det.draft&&!det.raw_n&&!det.raw_video_n&&!det.video&&!det.cards.length&&!det.thumb?`<div class="alert warn">아직 카드·영상이 없습니다 — 아침 초안 작업 전이거나 제작 대기</div>`:""}
    ${d?`<div class="meta" style="margin-top:8px">${dlabel(d.day)} ${d.day.slice(5)} 예약 · ${kindBadge(e.kind)}<span class="badge">${esc(e.category)}</span></div>`:`<div class="meta">날짜 미정</div>`}
    <h2>게시 전 점검 <span class="badge ${chk.verdict}">${LV[chk.verdict]}</span></h2>
    <div class="checks">${chk.items.map(i=>`<div><b class="lv-${i.level}">${esc(i.item)}</b><span>${esc(i.msg)}</span></div>`).join("")}</div>
    ${posted?`<div class="alert ok" style="margin-top:12px">이미 게시됨 ${esc(posted.at||"")} ${posted.permalink?`<a href="${esc(posted.permalink)}" target="_blank" rel="noopener">보기</a>`:""}</div>`:`
    ${warnOnly?`<label class="chk" style="margin-top:12px"><input type="checkbox" id="eW"> 주의 항목 확인했고 이대로 게시</label>`:""}
-   <button class="btn primary block" style="margin-top:12px" id="ePub" ${chk.verdict==="fail"?"disabled":""}>${chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":"✅ 승인하고 지금 게시"}</button>`}
+   ${!ready?`<div class="alert info" style="margin-top:12px">완성본과 게시 전 점검을 준비하고 있습니다. 자료가 갱신되면 미리보기를 다시 열어 주세요.</div>`:""}
+   <button class="btn primary block" style="margin-top:12px" id="ePub" ${chk.verdict==="fail"||!ready?"disabled":""}>${chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":"✅ 승인하고 지금 게시"}</button>`}
+   <button class="btn sm block" style="margin-top:8px" id="eReload">최신 미리보기 다시 열기</button>
    <h2>캡션</h2><textarea class="cap" id="eCap">${esc(det.caption||"")}</textarea>
    <div class="acts"><button class="btn sm" id="eSave">캡션 저장</button><span class="sub" id="eLen"></span></div>
    <h2>바꾸기</h2>
@@ -535,12 +560,13 @@ function openEp(rel){
    ${det.request?`<details><summary>제작 요청 메모</summary><pre class="src">${esc(det.request)}</pre></details>`:""}`);
   hydrate($("#shB"));
   const cap=$("#eCap"), upd=()=>{const t=cap.value,n=(t.match(/#[^\s#]+/g)||[]).length;$("#eLen").textContent=`${t.length}자 · 해시태그 ${n}개${n<3||n>5?" ⚠ 3~5개":""}`};cap.oninput=upd;upd();
-  $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장")}catch(e){toast(e.message)}};
+  $("#eReload").onclick=async()=>{const b=$("#eReload");b.disabled=true;try{await load(true);if(!LASTERR)openEp(rel);else toast(LASTERR)}finally{if(b.isConnected)b.disabled=false}};
+  $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장");if($("#ePub")){$("#ePub").disabled=true;$("#ePub").textContent="캡션 반영 후 미리보기를 다시 열어 주세요"}}catch(e){toast(e.message)}};
   $("#eDate").onclick=async()=>{const v=$("#eD").value;if(!v)return;try{await send("schedule",{date:v,folder:rel},"날짜 → "+v.slice(5))}catch(e){toast(e.message)}};
   if($("#eSwap")) $("#eSwap").onclick=()=>{SWAPDAY=d.day;PREDATE=null;closeSheet();TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)};
   $("#ePrev").onclick=async()=>{try{await send("preview",{folder:rel},"미리보기 재발송")}catch(e){toast(e.message)}};
   $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");$("#eRev").value=""}catch(e){toast(e.message)}};
-  if($("#ePub")&&chk.verdict!=="fail") armTwice($("#ePub"),"한 번 더 누르면 인스타에 게시됩니다",async()=>{
+  if($("#ePub")&&chk.verdict!=="fail"&&ready) armTwice($("#ePub"),"한 번 더 누르면 인스타에 게시됩니다",async()=>{
     if(warnOnly&&!$("#eW").checked){toast("주의 항목 확인 체크를 해 주세요");return false}
     if(!det.publication_preview||!det.publication_preview.fingerprint){toast("새 미리보기가 동기화된 뒤 승인해 주세요");return false}
     if(cap.value!==(det.caption||"")){toast("캡션을 먼저 저장하고 새 미리보기를 확인해 주세요");return false}
@@ -550,8 +576,10 @@ function openEp(rel){
 // ── 사진 보내기 ──
 let PICK=[];
 function vPhoto(){
+  const localPhotos=(S.photos||[]).slice();
   $("#main").innerHTML=`<h2>사진·영상 보내기</h2>
-   <p class="sub">여기서 보낸 사진은 OneDrive를 거치지 않고 맥으로 바로 갑니다. 맥이 받아서 회차 폴더를 만들고 예약까지 해 둡니다.</p>
+   <div class="steps"><span class="step ok">1 사진 등록</span><span class="step">2 초안 제작</span><span class="step">3 미리보기·수정</span><span class="step">4 승인·게시</span></div>
+   <p class="sub">사진과 메모를 보내면 맥이 회차를 만듭니다. ‘오늘’ 또는 ‘일정’에서 결과를 열어 미리보기를 확인하고 승인하세요.</p>
    <label class="btn primary block" style="text-align:center;color:#fff;margin-top:10px">사진·영상 고르기<input type="file" id="pf" accept="image/*,video/*" multiple hidden></label>
    <div class="photos" id="pv"></div>
    <div id="pform" ${PICK.length?"":"hidden"}>
@@ -574,22 +602,26 @@ function vPhoto(){
       <label>게시 날짜<select id="mD">${dayOpts("",true)}</select></label>
       <label>메모<textarea id="mN"></textarea></label>
       <button class="btn primary block" style="margin-top:12px" id="mGo">고른 사진으로 회차 만들기</button></div>`:`<p class="sub" style="margin-top:16px">OneDrive 인스타 폴더 맨 위나 _사진넣기에 사진을 넣으면, 맥이 받는 대로(3분 안) 여기에 뜹니다.</p>`}`;
-  $("#pf").onchange=e=>{PICK=PICK.concat([...e.target.files]).slice(0,20);showPick()};
+  restorePhotoDraft();
+  $("#pf").onchange=e=>{const files=[...e.target.files].filter(f=>f.type.startsWith("image/")||f.type.startsWith("video/")||/\.(heic|heif|jpe?g|png|webp|gif|mov|mp4|m4v)$/i.test(f.name));if(PICK.length+files.length>20)toast("한 번에 20개까지 보낼 수 있습니다");PICK=PICK.concat(files).slice(0,20);e.target.value="";showPick()};
   showPick();
   $("#pGo").onclick=sendPhotos;
-  const MSEL=new Set();
-  $$("[data-mp]").forEach(el=>el.onclick=()=>{const i=+el.dataset.mp;MSEL.has(i)?MSEL.delete(i):MSEL.add(i);el.style.outline=MSEL.has(i)?"3px solid var(--accent)":"";
-    $("#mform").hidden=!MSEL.size;$("#mcnt").textContent=`${MSEL.size}장 골랐습니다`});
+  const MSEL=photoDraft.selected, updateSelection=()=>{const available=new Set(localPhotos.map(p=>p.rel));for(const rel of MSEL)if(!available.has(rel))MSEL.delete(rel);$$("[data-mp]").forEach(el=>{el.style.outline=MSEL.has(localPhotos[+el.dataset.mp].rel)?"3px solid var(--accent)":""});if($("#mform")){$("#mform").hidden=!MSEL.size;$("#mcnt").textContent=`${MSEL.size}장 골랐습니다`}};
+  updateSelection();
+  $$("[data-mp]").forEach(el=>el.onclick=()=>{if(UPLOADING)return;const rel=localPhotos[+el.dataset.mp].rel;MSEL.has(rel)?MSEL.delete(rel):MSEL.add(rel);updateSelection()});
   if($("#mGo")) $("#mGo").onclick=async()=>{const t=$("#mT").value.trim();if(!t)return toast("매장 이름이나 제목을 적어 주세요");
+    if(!MSEL.size)return toast("사진을 먼저 골라 주세요");
     $("#mGo").disabled=true;
-    try{await send("assign_photos",{photos:[...MSEL].map(i=>S.photos[i].rel),title:t,category:$("#mC").value,format:$("#mF").value,date:$("#mD").value,note:$("#mN").value},"사진함 회차: "+t+" "+MSEL.size+"장");
-      TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message);$("#mGo").disabled=false}};
+    try{await send("assign_photos",{photos:[...MSEL],title:t,category:$("#mC").value,format:$("#mF").value,date:$("#mD").value,note:$("#mN").value},"사진함 회차: "+t+" "+MSEL.size+"장");
+      MSEL.clear();for(const id of ["mT","mN"])$("#"+id).value="";TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message);if($("#mGo"))$("#mGo").disabled=false}};
 }
+const PICKURL=new Map();
 function showPick(){
   const pv=$("#pv"); if(!pv) return;
-  pv.innerHTML=PICK.map((f,i)=>`<div>${f.type.startsWith("video")?`<video muted playsinline src="${URL.createObjectURL(f)}"></video>`:`<img src="${URL.createObjectURL(f)}" alt="">`}<span>${i+1}${i===0?" 첫 장":""}</span></div>`).join("");
+  for(const [f,url] of PICKURL)if(!PICK.includes(f)){URL.revokeObjectURL(url);PICKURL.delete(f)}
+  pv.innerHTML=PICK.map((f,i)=>{if(!PICKURL.has(f))PICKURL.set(f,URL.createObjectURL(f));return `<div>${f.type.startsWith("video")?`<video muted playsinline preload="metadata" src="${PICKURL.get(f)}"></video>`:`<img src="${PICKURL.get(f)}" alt="${esc(f.name)}">`}<span>${i+1}${i===0?" 첫 장":""} · 눌러서 빼기</span></div>`}).join("");
   $("#pform").hidden=!PICK.length;
-  pv.querySelectorAll("div").forEach((d,i)=>d.onclick=()=>{PICK.splice(i,1);showPick()});
+  pv.querySelectorAll("div").forEach((d,i)=>d.onclick=()=>{if(UPLOADING)return;PICK.splice(i,1);showPick()});
 }
 async function shrink(f){
   if(f.type.startsWith("video")){if(f.size>60e6)throw new Error(f.name+" 영상이 60MB를 넘습니다 — OneDrive나 텔레그램으로 보내 주세요");return {name:f.name,bytes:new Uint8Array(await f.arrayBuffer())}}
@@ -602,31 +634,37 @@ async function shrink(f){
   }catch(e){return {name:f.name,bytes:new Uint8Array(await f.arrayBuffer())}}
 }
 async function sendPhotos(){
-  if(!PICK.length) return;
+  if(UPLOADING||!PICK.length) return;
   const only=$("#pO").checked, title=$("#pT").value.trim();
   if(!only&&!title) return toast("매장 이름이나 제목을 적어 주세요");
+  savePhotoDraft();
+  const picked=[...PICK], body={title,category:$("#pC").value,format:$("#pF").value,date:$("#pD").value,note:$("#pN").value,only_inbox:only};
+  UPLOADING=true;
+  $$("#main input,#main select,#main textarea").forEach(el=>el.disabled=true);
   const b=$("#pGo"), bar=$("#pbar"), msg=$("#pmsg"); b.disabled=true; bar.hidden=false;
   const set=Date.now()+"_"+hex(crypto.getRandomValues(new Uint8Array(3))), files=[];
   try{
-    for(let i=0;i<PICK.length;i++){
-      msg.textContent=`${i+1}/${PICK.length} 암호화해서 올리는 중…`;
-      const s=await shrink(PICK[i]); const name=`p_${set}_${String(i+1).padStart(2,"0")}.bin`;
+    for(let i=0;i<picked.length;i++){
+      msg.textContent=`${i+1}/${picked.length} 암호화해서 올리는 중…`;
+      const s=await shrink(picked[i]); const name=`p_${set}_${String(i+1).padStart(2,"0")}.bin`;
       await ghPut("inbox/"+name,await enc(cat(new Uint8Array([82]),s.bytes)),"폰 사진");
-      files.push({name,orig:s.name}); bar.firstChild.style.width=Math.round(100*(i+1)/(PICK.length+1))+"%";
+      files.push({name,orig:s.name}); bar.firstChild.style.width=Math.round(100*(i+1)/(picked.length+1))+"%";
     }
-    await send("photos",{title,category:$("#pC").value,format:$("#pF").value,date:$("#pD").value,note:$("#pN").value,only_inbox:only},
-      (only?"사진함에 ":"사진 회차: "+title+" ")+PICK.length+"장",files);
+    await send("photos",body,(only?"사진함에 ":"사진 회차: "+title+" ")+picked.length+"장",files);
     bar.firstChild.style.width="100%"; msg.textContent="보냈습니다. 맥이 받으면 「오늘」에 결과가 뜹니다.";
-    PICK=[]; setTimeout(()=>{TAB="today";LS.set("sw-tab",TAB);start()},1200);
-  }catch(e){toast(e.message,6000);msg.textContent="실패: "+e.message;b.disabled=false}
+    PICK=[];for(const url of PICKURL.values())URL.revokeObjectURL(url);PICKURL.clear();
+    for(const id of ["pT","pN"])$("#"+id).value="";
+    savePhotoDraft();UPLOADING=false;TAB="today";LS.set("sw-tab",TAB);start();
+  }catch(e){toast(e.message,6000);msg.textContent="전송하지 못했습니다: "+e.message;b.disabled=false}
+  finally{UPLOADING=false;$$("#main input,#main select,#main textarea").forEach(el=>el.disabled=false)}
 }
 
 // ── 시트·버튼 ──
 function openSheet(t,html){$("#shT").textContent=t;$("#shB").innerHTML=html;$("#sheet").classList.add("open");$("#sbg").classList.add("open");$("#sheet").scrollTop=0}
-function closeSheet(){$("#sheet").classList.remove("open");$("#sbg").classList.remove("open");$$("#shB video").forEach(v=>v.pause())}
+function closeSheet(){$("#sheet").classList.remove("open");$("#sbg").classList.remove("open");$$("#shB video").forEach(v=>v.pause());render()}
 $("#shX").onclick=closeSheet;$("#sbg").onclick=closeSheet;
-function armTwice(btn,label,fn){let armed=false,orig=btn.textContent,h;btn.onclick=async()=>{if(!armed){armed=true;btn.textContent=label;btn.classList.add("danger");h=setTimeout(()=>{armed=false;btn.textContent=orig;btn.classList.remove("danger")},5000);return}
-  clearTimeout(h);btn.disabled=true;const r=await fn();if(r===false){btn.disabled=false;armed=false;btn.textContent=orig;btn.classList.remove("danger")}}}
+function armTwice(btn,label,fn){let armed=false,orig=btn.textContent,h;const reset=()=>{armed=false;btn.disabled=false;btn.textContent=orig;btn.classList.remove("danger")};btn.onclick=async()=>{if(btn.disabled)return;if(!armed){armed=true;btn.textContent=label;btn.classList.add("danger");h=setTimeout(reset,5000);return}
+  clearTimeout(h);btn.disabled=true;try{await fn()}catch(e){toast(e.message)}finally{reset()}}}
 function bind(){
   $$("#main [data-open]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();openEp(el.dataset.open)});
   $$("#main [data-pick]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();PREDATE=el.dataset.pick;TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)});
