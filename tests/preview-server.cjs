@@ -51,7 +51,7 @@ const dayOffset = offset => new Date(midnight + offset * 86400000).toISOString()
 const state = { at: minute(), today, tomorrow: dayOffset(1), days: Array.from({ length: 42 }, (_, i) => ({ day: dayOffset(i - 21), wd: '목', ig: [], reqs: [], folder: null })),
   pipelines: [{ day: today, steps: [] }, { day: dayOffset(1), steps: [] }], alerts: [{ level: 'info', msg: '로컬 검증용 앱입니다. 실제 인스타그램에는 게시되지 않습니다.' }],
   collected: { news: minute(), ig: minute() }, health: { onedrive: { installed: true, running: true, cloud_only: 0 } }, results: [], jobs: [], photos: [],
-  details: {}, unscheduled: [], requests: [], topics: [], world: [], deep: [], deep_requests: [], workflow: { summary: { planned_count: 0 }, plan: [], candidates: [] } };
+  details: {}, review_queue: [], production: {jobs: []}, unscheduled: [], requests: [], topics: [], world: [], deep: [], deep_requests: [], workflow: { summary: { planned_count: 0 }, plan: [], candidates: [] } };
 const config = { v: 1, repo: 'test/app', api: origin, salt: salt.toString('base64'), iter: iterations, tok: encrypt(Buffer.from('local-fixture-token')).toString('base64'), at: 'local-integration-fixture-v1' };
 let episodeCount = 0;
 function snapshot() { state.at = minute(); fs.writeFileSync(path.join(fixtureDir, 'state.json'), JSON.stringify(state, null, 2)); }
@@ -67,7 +67,8 @@ function processCommand(command) {
     const episode = { rel, title: body.title || '로컬 테스트 회차', hook: body.title || '로컬 테스트 회차', kind: '카드', category: body.category || '현장', thumb: 'fixture-card-v1' };
     const calendarDay = state.days.find(d => d.day === day); if (calendarDay) { calendarDay.ep = episode; calendarDay.folder = rel; } else state.unscheduled.push(episode);
     const raw = (command.files || []).map((file, i) => { const key = `uploaded-${number}-${i}`; media.set(key, inbox.get(file.name) || image); return key; });
-    state.details[name] = { cards: ['fixture-card-v1'], raw, raw_n: raw.length, raw_videos: [], raw_video_n: 0, caption: '로컬 검증용 캡션입니다. #로컬테스트 #미리보기 #세왕상사',
+    state.review_queue.push({...episode,status:'review',reason:'검증용 완성본',at:minute(),name});
+    state.details[name] = { preview_ready:true, cards: ['fixture-card-v1'], raw, raw_n: raw.length, raw_videos: [], raw_video_n: 0, caption: '로컬 검증용 캡션입니다. #로컬테스트 #미리보기 #세왕상사',
       check: { verdict: 'ok', items: [{ item: '검증 환경', level: 'ok', msg: '가상 자료로만 처리합니다' }] }, request: body.note || '', publication_preview: { fingerprint: `local-preview-${number}-v1` } };
     if (!state.pipelines.some(p => p.day === day)) state.pipelines.push({ day, steps: [] });
     state.pipelines.find(p => p.day === day).steps = [{ label: '사진 등록', state: 'ok', note: '검증용' }, { label: '미리보기', state: 'ok', note: '검증용' }, { label: '승인', state: 'wait', note: '검증용' }];
@@ -76,8 +77,10 @@ function processCommand(command) {
   if (command.type === 'publish') {
     const name = (body.folder || '').split('/').pop(), detail = state.details[name];
     if (!detail || body.fingerprint !== detail.publication_preview.fingerprint) return result(command, false, '미리보기 fingerprint가 일치하지 않습니다');
+    if(body.reviewed!==true||body.reviewed_fingerprint!==body.fingerprint)return result(command,false,'최종 내용 확인 체크가 필요합니다');
     const episode = state.days.map(d => d.ep).find(e => e && e.rel === body.folder) || state.unscheduled.find(e => e.rel === body.folder);
     if (episode) episode.posted = { at: minute(), permalink: `${origin}/mock-post/${encodeURIComponent(name)}`, story: 'ok' };
+    state.review_queue=state.review_queue.filter(item=>item.rel!==body.folder);
     log({ event: 'mock-published', folder: body.folder, fingerprint: body.fingerprint });
     return result(command, true, '가상 게시 완료 — 실제 인스타그램 전송 없음');
   }
