@@ -16,7 +16,7 @@ class Element {
     this.children = []; this.style = {}; this.value = attrs.value || '';
     this.type = attrs.type || ''; this.checked = 'checked' in attrs;
     this.disabled = 'disabled' in attrs; this.hidden = 'hidden' in attrs;
-    this.dataset = Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-')).map(([k, v]) => [k.slice(5), v]));
+    this.dataset = Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-')).map(([k, v]) => [k.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase()), v]));
     const classes = new Set((attrs.class || '').split(/\s+/).filter(Boolean));
     this.classList = {
       add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c),
@@ -183,16 +183,19 @@ test('two-click actions recover after thrown errors and handled failures', async
   assert.equal(btn.disabled, false); assert.equal(btn.textContent, '게시');
 });
 
-test('publish requires the preview fingerprint and an unchanged caption, then sends that fingerprint', async () => {
+test('publish requires explicit review, the preview fingerprint and an unchanged caption', async () => {
   const h = harness(); h.context.__calls = [];
   h.context.__detail = { cards: [], raw: [], caption: '승인한 캡션', check: { items: [], verdict: 'ok' }, publication_preview: null };
   h.run('S.unscheduled=[{rel:"episodes/test",title:"테스트"}];S.details.test=__detail;send=async(...args)=>__calls.push(args);start=()=>{};hydrate=()=>{};openEp("episodes/test")');
   let publish = h.el('ePub'); assert.equal(publish.disabled, true); assert.equal(h.context.__calls.length, 0);
   h.run('__detail.publication_preview={fingerprint:"expected-preview-fingerprint"};__detail.cards=["finished-card-key"];openEp("episodes/test")');
-  h.el('eCap').value = '아직 저장하지 않은 수정'; publish = h.el('ePub'); await publish.onclick(); await publish.onclick(); assert.equal(h.context.__calls.length, 0);
-  h.el('eCap').value = '승인한 캡션'; await publish.onclick(); await publish.onclick();
+  publish = h.el('ePub'); assert.equal(publish.disabled, true); await publish.onclick(); await publish.onclick(); assert.equal(h.context.__calls.length, 0);
+  h.el('eChecked').checked = true; h.el('eChecked').onchange(); assert.equal(publish.disabled, false);
+  h.el('eCap').value = '아직 저장하지 않은 수정'; h.el('eCap').oninput(); await publish.onclick(); await publish.onclick(); assert.equal(h.context.__calls.length, 0);
+  assert.equal(h.el('eChecked').checked, false); assert.equal(publish.disabled, true);
+  h.el('eCap').value = '승인한 캡션'; h.el('eCap').oninput(); h.el('eChecked').checked = true; h.el('eChecked').onchange(); await publish.onclick(); await publish.onclick();
   assert.equal(h.context.__calls.length, 1);
-  assert.deepEqual(plain(h.context.__calls[0].slice(0, 2)), ['publish', { folder: 'episodes/test', allow_warn: false, fingerprint: 'expected-preview-fingerprint' }]);
+  assert.deepEqual(plain(h.context.__calls[0].slice(0, 2)), ['publish', { folder: 'episodes/test', allow_warn: false, fingerprint: 'expected-preview-fingerprint', reviewed: true, reviewed_fingerprint: 'expected-preview-fingerprint' }]);
 });
 
 test('raw-video-only detail shows its video but keeps publishing disabled until a finished asset exists', () => {
@@ -203,5 +206,78 @@ test('raw-video-only detail shows its video but keeps publishing disabled until 
   assert.equal(h.el('shB').querySelectorAll('video').length, 1);
   assert.equal(h.el('shB').querySelectorAll('video')[0].dataset.m, 'raw-video-key');
   h.run('__detail.video="finished-video-key";openEp("episodes/test")');
+  assert.equal(h.el('ePub').disabled, true); assert.equal(h.el('eChecked').disabled, false);
+  h.el('eChecked').checked = true; h.el('eChecked').onchange();
   assert.equal(h.el('ePub').disabled, false); assert.equal(typeof h.el('ePub').onclick, 'function');
+});
+
+test('all registered episodes appear in the review queue and status filters keep the correct items', () => {
+  const h = harness();
+  h.context.__queue = [
+    { rel: 'older/ready', title: '이전 날짜 완성본', status: 'review' },
+    { rel: 'future/running', title: '새 사진 제작 중', status: 'running' },
+    { rel: 'unscheduled/failed', title: '원본 확인 요청', status: 'failed', reason: '사진을 확인해 주세요' }
+  ];
+  h.run('S.review_queue=__queue;TAB="today";render()');
+  assert.match(h.el('main').innerHTML, /발행 전 검토/);
+  assert.equal(h.document.querySelectorAll('[data-open]').length, 3);
+  h.document.querySelectorAll('[data-review-filter]').find(el => el.dataset.reviewFilter === 'review').onclick();
+  assert.deepEqual(h.document.querySelectorAll('[data-open]').map(el => el.dataset.open), ['older/ready']);
+  h.document.querySelectorAll('[data-review-filter]').find(el => el.dataset.reviewFilter === 'working').onclick();
+  assert.deepEqual(h.document.querySelectorAll('[data-open]').map(el => el.dataset.open), ['future/running']);
+  h.document.querySelectorAll('[data-review-filter]').find(el => el.dataset.reviewFilter === 'attention').onclick();
+  assert.deepEqual(h.document.querySelectorAll('[data-open]').map(el => el.dataset.open), ['unscheduled/failed']);
+  assert.equal(h.document.querySelectorAll('[data-produce]').length, 1);
+});
+
+test('review entries outside the calendar can open their exact-path details', () => {
+  const h = harness();
+  h.run('S.review_queue=[{rel:"older/same-name",title:"지난 날짜 검토본",status:"review"}];S.details["older/same-name"]={cards:["finished-card"],caption:"완성 캡션",check:{items:[],verdict:"ok"},publication_preview:{fingerprint:"fp-old"}};hydrate=()=>{};openEp("older/same-name")');
+  assert.equal(h.el('shT').textContent, '지난 날짜 검토본');
+  assert.equal(h.el('eCap').value, '완성 캡션');
+  assert.equal(h.el('eChecked').disabled, false);
+});
+
+test('an explicitly empty review queue does not resurface old production jobs', () => {
+  const h = harness();
+  h.run('S.review_queue=[];S.production={jobs:[{rel:"already/posted",title:"이미 게시된 회차",status:"review"}]};TAB="today";render()');
+  assert.equal(h.document.querySelectorAll('[data-open]').length, 0);
+  assert.doesNotMatch(h.el('main').innerHTML, /이미 게시된 회차/);
+});
+
+test('production in progress blocks stale finished assets from approval', () => {
+  const h = harness();
+  h.run('S.review_queue=[{rel:"episodes/test",title:"제작중 회차",status:"review"}];S.production={jobs:[{rel:"episodes/test",status:"running",message:"새 완성본 제작 중"}]};S.details.test={cards:["old-card"],caption:"이전 캡션",check:{items:[],verdict:"ok"},publication_preview:{fingerprint:"old-fp"}};hydrate=()=>{};openEp("episodes/test")');
+  assert.equal(h.el('eChecked').disabled, true); assert.equal(h.el('ePub').disabled, true);
+  h.run('S.production.jobs[0].status="review";openEp("episodes/test")');
+  assert.equal(h.el('eChecked').disabled, false); assert.equal(h.el('eChecked').checked, false);
+});
+
+test('a changed preview fingerprint invalidates a checked and armed publication', async () => {
+  const h = harness(); h.context.__calls = [];
+  h.run('S.review_queue=[{rel:"episodes/test",title:"회차",status:"review"}];S.details.test={cards:["card"],caption:"캡션",check:{items:[],verdict:"ok"},publication_preview:{fingerprint:"first-fp"}};send=async(...args)=>__calls.push(args);hydrate=()=>{};openEp("episodes/test")');
+  h.el('eChecked').checked = true; h.el('eChecked').onchange();
+  const publish = h.el('ePub'); await publish.onclick();
+  h.run('S.details.test={...S.details.test,publication_preview:{fingerprint:"new-fp"}}');
+  await publish.onclick();
+  assert.equal(h.context.__calls.length, 0); assert.equal(h.el('eChecked').checked, false); assert.equal(publish.disabled, true);
+  h.run('openEp("episodes/test")'); assert.equal(h.el('eChecked').checked, false);
+});
+
+test('unchecking review cancels an armed action and cannot be undone by its timeout', async () => {
+  const h = harness();
+  h.run('S.unscheduled=[{rel:"episodes/test",title:"회차"}];S.details.test={cards:["card"],caption:"캡션",check:{items:[],verdict:"ok"},publication_preview:{fingerprint:"fp"}};hydrate=()=>{};openEp("episodes/test")');
+  h.el('eChecked').checked = true; h.el('eChecked').onchange(); await h.el('ePub').onclick();
+  const timeout = [...h.timeouts.values()].find(timer => timer.ms === 5000);
+  h.el('eChecked').checked = false; h.el('eChecked').onchange(); timeout.fn();
+  assert.equal(h.el('ePub').disabled, true); assert.equal(h.el('ePub').classList.contains('danger'), false);
+});
+
+test('failed production can be retried without any publication command', async () => {
+  const h = harness(); h.context.__calls = [];
+  h.run('S.review_queue=[{rel:"episodes/test",title:"회차",status:"failed"}];S.production={jobs:[{rel:"episodes/test",status:"failed",message:"원본 확인 후 다시 제작"}]};send=async(...args)=>__calls.push(args);TAB="today";render()');
+  const button = h.document.querySelectorAll('[data-produce]')[0];
+  await button.onclick({ stopPropagation() {} });
+  assert.deepEqual(plain(h.context.__calls[0].slice(0, 2)), ['produce', { folder: 'episodes/test' }]);
+  assert.equal(button.disabled, true); assert.equal(h.context.__calls.length, 1);
 });
