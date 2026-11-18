@@ -557,7 +557,7 @@ function openEp(rel){
     hydrate($("#shB")); return;
   }
   const chk=det.check||{items:[],verdict:"ok"}, posted=e&&e.posted;
-  const ready=!!(productionAllowsReview(rel)&&det.publication_preview&&det.publication_preview.fingerprint&&(det.video||(det.cards||[]).length)&&String(det.caption||"").trim());
+  const ready=!!(productionAllowsReview(rel)&&det.preview_ready!==false&&det.publication_preview&&det.publication_preview.fingerprint&&(det.video||(det.cards||[]).length)&&String(det.caption||"").trim());
   const warnOnly=chk.verdict==="warn";
   openSheet(title,`
    ${productionPanel}
@@ -594,18 +594,18 @@ function openEp(rel){
   hydrate($("#shB"));
   const cap=$("#eCap"),pub=$("#ePub"),confirmed=$("#eChecked");let disarmPublish=()=>{},captionPending=false;
   const canApprove=()=>ready&&chk.verdict!=="fail"&&!captionPending&&confirmed&&confirmed.checked&&(!warnOnly||$("#eW").checked)&&cap.value===(det.caption||"");
-  const syncApproval=()=>{if(!pub)return;pub.disabled=!canApprove();pub.textContent=chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":captionPending?"캡션 반영 후 미리보기를 다시 열어 주세요":canApprove()?"✅ 승인하고 지금 게시":"내용 확인 후 승인 가능"};
+  const syncApproval=()=>{if(!pub)return;pub.disabled=!canApprove();pub.textContent=chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":captionPending?"변경 반영 후 미리보기를 다시 열어 주세요":canApprove()?"✅ 승인하고 지금 게시":"내용 확인 후 승인 가능"};
   const upd=()=>{const t=cap.value,n=(t.match(/#[^\s#]+/g)||[]).length;$("#eLen").textContent=`${t.length}자 · 해시태그 ${n}개${n<3||n>5?" ⚠ 3~5개":""}`};
   cap.oninput=()=>{upd();if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()};upd();
   if(confirmed)confirmed.onchange=()=>{disarmPublish();syncApproval()};
   if($("#eW"))$("#eW").onchange=()=>{disarmPublish();syncApproval()};
-  if($("#eProduce"))$("#eProduce").onclick=()=>requestProduction(rel,$("#eProduce"));
+  if($("#eProduce"))$("#eProduce").onclick=async()=>{captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval();await requestProduction(rel,$("#eProduce"))};
   $("#eReload").onclick=async()=>{const b=$("#eReload");b.disabled=true;try{await load(true);if(!LASTERR)openEp(rel);else toast(LASTERR)}finally{if(b.isConnected)b.disabled=false}};
   $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()}catch(e){toast(e.message)}};
   $("#eDate").onclick=async()=>{const v=$("#eD").value;if(!v)return;try{await send("schedule",{date:v,folder:rel},"날짜 → "+v.slice(5))}catch(e){toast(e.message)}};
   if($("#eSwap")) $("#eSwap").onclick=()=>{SWAPDAY=d.day;PREDATE=null;closeSheet();TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)};
   $("#ePrev").onclick=async()=>{try{await send("preview",{folder:rel},"미리보기 재발송")}catch(e){toast(e.message)}};
-  $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");$("#eRev").value=""}catch(e){toast(e.message)}};
+  $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval();$("#eRev").value=""}catch(e){toast(e.message)}};
   if(pub&&chk.verdict!=="fail"&&ready){pub._sync=syncApproval;disarmPublish=armTwice(pub,"한 번 더 누르면 인스타에 게시됩니다",async()=>{
     if(!confirmed.checked){toast("이미지·영상과 최종 캡션 확인을 체크해 주세요");return false}
     if(warnOnly&&!$("#eW").checked){toast("주의 항목 확인 체크를 해 주세요");return false}
