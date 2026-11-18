@@ -92,6 +92,7 @@ textarea.cap{min-height:260px;font-size:14px}
 .sheet .sh h3{flex:1;margin:0;font-size:16px;line-height:1.35}
 .strip{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:6px}
 .strip img{height:360px;max-width:88vw;border-radius:10px;scroll-snap-align:start;background:var(--surface-3);object-fit:contain}
+.history-media video{width:auto;max-width:88vw;height:360px;flex:none;scroll-snap-align:start}
 video{width:100%;max-height:70vh;border-radius:10px;background:#000}
 .checks div{font-size:13px;padding:5px 0;border-bottom:1px dashed var(--line);display:flex;gap:8px}
 .checks div b{flex:none;width:74px;font-weight:600}
@@ -276,8 +277,8 @@ async function load(quiet){
     S=JSON.parse(TD.decode(await unpack(await dec(st))));
     const done=new Set((S.results||[]).map(r=>r.id)); LS.set("sw-pend",pending().filter(p=>!done.has(p.id)));
     LASTERR="";
-    if(UPLOADING||(quiet&&$("#pf")&&TAB==="photo")||$("#sheet").classList.contains("open"))statusLine();else render();
-  }catch(e){LASTERR=e.message; if(!quiet) toast(e.message); if(String(e.message).includes("비밀번호")) {LS.del("sw-key");loginUI("비밀번호가 바뀌었습니다. 다시 넣어 주세요")} else render()}
+    if(UPLOADING||(quiet&&$("#pf")&&TAB==="photo")||$("#sheet").classList.contains("open"))statusLine();else if(quiet&&historyScreenActive()){statusLine();refreshHistoryContent()}else render();
+  }catch(e){LASTERR=e.message; if(!quiet) toast(e.message); if(String(e.message).includes("비밀번호")) {LS.del("sw-key");loginUI("비밀번호가 바뀌었습니다. 다시 넣어 주세요")} else if(quiet&&historyScreenActive())statusLine();else render()}
   finally{LOADING=false}
 }
 function start(){
@@ -285,7 +286,7 @@ function start(){
   clearInterval(refreshTimer);
   $("#app").innerHTML=`<div class="top"><h1><img src="icons/icon-192.png" alt="">세왕 발행실<span style="flex:1"></span><button class="btn sm" id="rf">새로고침</button></h1><div class="st" id="stl"></div></div>
   <main id="main"><div class="empty">불러오는 중…</div></main>
-  <nav class="bot">${[["today","오늘",'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],["workflow","계획",'<path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/>'],["cal","일정",'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'],["topics","소재",'<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z"/>'],["photo","사진 보내기",'<rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/>']].map(([k,l,i])=>`<button data-tab="${k}" class="${TAB===k?"on":""}"><svg viewBox="0 0 24 24">${i}</svg>${l}</button>`).join("")}</nav>`;
+  <nav class="bot">${[["today","오늘",'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],["workflow","계획",'<path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/>'],["cal","일정·기록",'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'],["topics","소재",'<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z"/>'],["photo","사진 보내기",'<rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/>']].map(([k,l,i])=>`<button data-tab="${k}" class="${TAB===k?"on":""}"><svg viewBox="0 0 24 24">${i}</svg>${l}</button>`).join("")}</nav>`;
   $$("nav.bot button").forEach(b=>b.onclick=()=>{if(UPLOADING)return toast("사진 전송이 끝날 때까지 기다려 주세요");savePhotoDraft();TAB=b.dataset.tab;LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x===b));render();window.scrollTo(0,0)});
   $("#rf").onclick=()=>load();
   render();load(); refreshTimer=setInterval(()=>{if(!$("#sheet").classList.contains("open")&&document.visibilityState==="visible")load(true)},90000);
@@ -393,6 +394,7 @@ function pipeCard(p){
 function vToday(){
   const al=(S.alerts||[]);
   $("#main").innerHTML=`${al.map(a=>`<div class="alert ${a.level}">${esc(a.msg)}</div>`).join("")}
+   <div class="acts" style="margin:4px 0 12px"><button class="btn sm" id="goHistory">기존 게시물 이력${S.published_history?` · 인스타 ${Number(S.published_history.summary&&S.published_history.summary.api_count)||0}개`:""}</button></div>
    ${reviewBox()}
    ${S.pipelines.map(pipeCard).join("")}
    ${pendBox()}
@@ -401,6 +403,7 @@ function vToday(){
    <div class="acts" style="margin-top:18px"><button class="btn sm" id="bCol">뉴스·성과 지금 수집</button><button class="btn sm" id="bOut">로그아웃</button></div>
    <p class="sub" style="margin-top:14px">맥 자료 ${esc(S.at)} · 뉴스 ${esc((S.collected.news||"").slice(5,16))} · 인스타 ${esc((S.collected.ig||"").slice(5,16))}${S.health&&S.health.token_expiry?` · 토큰 만료 ${esc(S.health.token_expiry.slice(0,10))}`:""}</p>`;
   bind();
+  $("#goHistory").onclick=showPublishedHistory;
   $("#bCol").onclick=()=>send("collect",{},"뉴스·성과 수집").catch(e=>toast(e.message));
   $("#bOut").onclick=logout;
 }
@@ -414,6 +417,8 @@ function weekPerf(){
 // ── 일정 ──
 let CALF=LS.get("sw-calf","next");
 function vCal(){
+  if(CALF==="past"){vPublishedHistory();return}
+  CALF="next";
   const next=S.days.filter(d=>d.day>=S.today), past=S.days.filter(d=>d.day<S.today).reverse();
   const row=d=>{
     const x=new Date(d.day+"T00:00:00"), e=d.ep;
@@ -428,12 +433,112 @@ function vCal(){
     return `<div class="day"><div class="dd ${d.day===S.today?"today":""} ${x.getDay()===0?"sun":""}"><b>${x.getDate()}</b><span>${x.getMonth()+1}월 ${d.wd}</span></div><div class="grow">${body}</div></div>`;
   };
   const un=S.unscheduled||[];
-  $("#main").innerHTML=`<div class="seg"><button data-f="next" class="${CALF==="next"?"on":""}">앞으로 나갈 것</button><button data-f="past" class="${CALF==="past"?"on":""}">올라간 것 (3주)</button></div>
+  $("#main").innerHTML=`<div class="seg"><button data-f="next" class="${CALF==="next"?"on":""}">앞으로 나갈 것</button><button data-f="past" class="${CALF==="past"?"on":""}">게시완료 전체</button></div>
    ${CALF==="next"?`<div class="card">${next.map(row).join("")}</div>
      ${un.length?`<h2>날짜 없는 회차</h2><div class="card">${un.map(u=>`<div class="day"><div class="dd"><b>–</b><span>미정</span></div><div class="row grow" data-open="${esc(u.rel)}">${TH(u.thumb)}<div class="grow"><div class="ttl">${esc(u.title)}</div><div class="meta">${kindBadge(u.kind)}<span class="badge">${esc(u.category)}</span></div></div></div></div>`).join("")}</div>`:""}`
    :`<div class="card">${past.map(row).join("")}</div>`}`;
   $$(".seg button").forEach(b=>b.onclick=()=>{CALF=b.dataset.f;LS.set("sw-calf",CALF);render()});
   bind();
+}
+
+// ── 전체 게시 이력 ──
+const HISTORY_FILTER={query:"",month:"",kind:"",status:"api_verified",limit:50};
+function historyScreenActive(){return TAB==="cal"&&CALF==="past"&&!!$("#hQuery")}
+function historyData(){const h=S&&S.published_history;return h&&Array.isArray(h.items)?h:{items:[],summary:{complete:false}}}
+function historyDay(item){const day=String(item.date||"");return /^\d{4}-\d{2}-\d{2}$/.test(day)&&Number.isFinite(Date.parse(day+"T00:00:00Z"))?day:""}
+function historyKind(item){
+  const k=String(item.kind||item.media_type||"");
+  if(k==="릴스"||k.toUpperCase()==="REELS"||String(item.media_product_type||"").toUpperCase()==="REELS")return "릴스";
+  if(k==="카드"||["CAROUSEL_ALBUM","CAROUSEL"].includes(k.toUpperCase()))return "카드";
+  if(k==="사진"||k.toUpperCase()==="IMAGE")return "사진";
+  if(k==="영상"||k.toUpperCase()==="VIDEO")return "영상";
+  if(k.toUpperCase()==="FEED")return item.media_type?historyKind({kind:item.media_type}):"피드";
+  return k||"종류 미확인";
+}
+function historyStatus(item){return item.status||"api_unconfirmed"}
+function historyStatusLabel(status){return ({api_verified:"인스타 확인",local_only:"로컬 기록만 · 확인 필요",api_unconfirmed:"현재 인스타 확인 대기"})[status]||"확인 필요"}
+function historyStamp(value){const parsed=new Date(String(value||"").replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));return Number.isFinite(parsed.getTime())?parsed.toLocaleString("ko-KR",{timeZone:"Asia/Seoul",hour12:false}):"미확인"}
+function historyTitle(item){return String(item.title||item.caption&&item.caption.trim().split("\n")[0]||`${historyKind(item)} · ${historyDay(item)||"날짜 미확인"} (캡션 없음)`)}
+function historyMetric(value){return value===null||value===undefined||value===""?"미집계":esc(value)}
+function historyHttps(url){return typeof url==="string"&&/^https:\/\//i.test(url)?url:""}
+function historyLink(url){return typeof url==="string"&&/^https:\/\/(?:www\.)?instagram\.com\//i.test(url)?url:""}
+function historyCover(item){
+  if(historyHttps(item.thumbnail_url))return item.thumbnail_url;
+  const first=(item.media||[]).find(m=>historyHttps(m.thumbnail_url)||["IMAGE","사진"].includes(String(m.type||m.media_type||"").toUpperCase())&&historyHttps(m.media_url));
+  if(first)return first.thumbnail_url||first.media_url;
+  return ["카드","사진"].includes(historyKind(item))?historyHttps(item.media_url):"";
+}
+function historySorted(){return historyData().items.filter(item=>item&&typeof item==="object").slice().sort((a,b)=>(historyDay(b)||"").localeCompare(historyDay(a)||"")||String(b.published_at||"").localeCompare(String(a.published_at||""))||String(b.id||"").localeCompare(String(a.id||"")))}
+function filteredHistory(){
+  const terms=HISTORY_FILTER.query.normalize("NFKC").toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return historySorted().filter(item=>{
+    const haystack=[historyTitle(item),item.caption,item.category,item.folder,...item.local_rels||[]].filter(Boolean).join(" ").normalize("NFKC").toLocaleLowerCase();
+    return (!HISTORY_FILTER.month||historyDay(item).slice(0,7)===HISTORY_FILTER.month)&&(!HISTORY_FILTER.kind||historyKind(item)===HISTORY_FILTER.kind)&&(HISTORY_FILTER.status==="all"||historyStatus(item)===HISTORY_FILTER.status)&&terms.every(term=>haystack.includes(term));
+  });
+}
+function showPublishedHistory(){
+  CALF="past";TAB="cal";LS.set("sw-calf",CALF);LS.set("sw-tab",TAB);
+  $$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0);
+}
+function historySummaryHtml(){
+  const h=historyData(),s=h.summary||{},items=h.items;
+  const verified=s.api_count??items.filter(x=>historyStatus(x)==="api_verified").length;
+  const local=s.local_only_count??items.filter(x=>historyStatus(x)==="local_only").length;
+  const unconfirmed=s.api_unconfirmed_count??items.filter(x=>historyStatus(x)==="api_unconfirmed").length;
+  return `<div class="card"><div class="ttl">인스타 확인 ${esc(verified)}개 <span class="badge warn">로컬 기록 ${esc(local)}개 별도</span>${unconfirmed?`<span class="badge warn">현재 확인 대기 ${esc(unconfirmed)}개</span>`:""}</div>
+    <div class="meta">${s.oldest&&s.newest?`${esc(s.oldest)} ~ ${esc(s.newest)} · `:""}마지막 전체 확인 ${esc(historyStamp(s.synced_at))}</div>
+    <p class="sub" style="margin:7px 0 0">월·종류로 찾거나 제목과 캡션 전체를 검색하세요. 로컬 기록과 현재 확인 대기는 인스타 확인 건수에 포함하지 않습니다.</p></div>
+    ${s.complete===false?`<div class="alert warn">전체 이력 조회를 아직 완료하지 못했습니다. 확인된 기록을 보존해 보여드립니다. ‘인스타 이력 다시 확인’으로 갱신할 수 있습니다.</div>`:""}`;
+}
+function vPublishedHistory(){
+  const items=historySorted(),months=[...new Set(items.map(x=>historyDay(x).slice(0,7)).filter(Boolean))],kinds=[...new Set(items.map(historyKind))];
+  const selected=(value,current)=>value===current?"selected":"";
+  $("#main").innerHTML=`<div class="seg"><button data-f="next">앞으로 나갈 것</button><button data-f="past" class="on">게시완료 전체</button></div>
+    <h2>기존 인스타 게시물 전체</h2><div id="hSummary">${historySummaryHtml()}</div>
+    <label>제목·캡션·분류 검색<input type="text" id="hQuery" placeholder="매장 이름, 주제, 캡션 속 단어" value="${esc(HISTORY_FILTER.query)}" autocomplete="off"></label>
+    <div class="row"><label class="grow">게시 월<select id="hMonth"><option value="">전체 기간</option>${months.map(month=>`<option value="${month}" ${selected(month,HISTORY_FILTER.month)}>${month.replace("-","년 ")}월</option>`).join("")}</select></label>
+    <label class="grow">종류<select id="hKind"><option value="">전체 종류</option>${kinds.map(kind=>`<option value="${esc(kind)}" ${selected(kind,HISTORY_FILTER.kind)}>${esc(kind)}</option>`).join("")}</select></label></div>
+    <label>확인 상태<select id="hStatus">${[["api_verified","인스타 확인 게시물"],["local_only","로컬 기록만 · 확인 필요"],["api_unconfirmed","현재 인스타 확인 대기"],["all","모든 기록"]].map(([key,label])=>`<option value="${key}" ${selected(key,HISTORY_FILTER.status)}>${label}</option>`).join("")}</select></label>
+    <div class="acts"><button class="btn sm" id="hReset">검색·필터 초기화</button><button class="btn sm" id="hSync">인스타 이력 다시 확인</button></div>
+    <p class="sub" id="hCount" aria-live="polite"></p><div id="hRows"></div>`;
+  $$("#main [data-f]").forEach(button=>button.onclick=()=>{CALF=button.dataset.f;LS.set("sw-calf",CALF);render()});
+  $("#hQuery").oninput=e=>{HISTORY_FILTER.query=e.target.value;HISTORY_FILTER.limit=50;refreshHistoryContent()};
+  for(const [id,key] of [["hMonth","month"],["hKind","kind"],["hStatus","status"]])$("#"+id).onchange=e=>{HISTORY_FILTER[key]=e.target.value;HISTORY_FILTER.limit=50;refreshHistoryContent()};
+  $("#hReset").onclick=()=>{Object.assign(HISTORY_FILTER,{query:"",month:"",kind:"",status:"api_verified",limit:50});vPublishedHistory()};
+  $("#hSync").onclick=async()=>{const button=$("#hSync");button.disabled=true;try{await send("sync_history",{},"기존 인스타 전체 이력 확인");button.textContent="확인 요청 보냄"}catch(e){toast(e.message);button.disabled=false}};
+  refreshHistoryContent();
+}
+function refreshHistoryContent(){
+  if(!historyScreenActive())return;
+  $("#hSummary").innerHTML=historySummaryHtml();
+  const filtered=filteredHistory(),visible=filtered.slice(0,HISTORY_FILTER.limit),counts={};
+  for(const item of filtered){const month=historyDay(item).slice(0,7)||"unknown";counts[month]=(counts[month]||0)+1}
+  $("#hCount").textContent=`검색 결과 ${filtered.length}개 · ${visible.length}개 표시`;
+  let lastMonth="";
+  $("#hRows").innerHTML=visible.map(item=>{
+    const day=historyDay(item),month=day.slice(0,7)||"unknown",cover=historyCover(item),metric=item.metrics||{},status=historyStatus(item),heading=month!==lastMonth?`<h2>${month==="unknown"?"날짜 미확인":esc(month.replace("-","년 ")+"월")} <span class="badge">${counts[month]}개</span></h2>`:"";lastMonth=month;
+    const origin=({app_linked:"로컬 회차 연결",instagram_only:"인스타 기록만",local_only:"로컬 기록"})[item.origin]||"";
+    return `${heading}<div class="card"><div class="row">${cover?`<img class="th" src="${esc(cover)}" alt="게시물 표지" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">`:""}<div class="grow"><div class="ttl">${esc(historyTitle(item))}</div><div class="meta">${esc(day||"게시일 미확인")} · ${kindBadge(historyKind(item))}${item.category?`<span class="badge">${esc(item.category)}</span>`:""}</div><div class="chips"><span class="badge ${status==="api_verified"?"ok":"warn"}">${historyStatusLabel(status)}</span>${origin?`<span class="badge">${origin}</span>`:""}</div><div class="meta">조회 ${historyMetric(metric.views)} · 좋아요 ${historyMetric(metric.likes)} · 저장 ${historyMetric(metric.saved)}</div></div></div><div class="acts"><button class="btn sm" data-history="${esc(item.id)}">캡션·게시 기록 보기</button>${historyLink(item.permalink)?`<a class="btn sm" href="${esc(historyLink(item.permalink))}" target="_blank" rel="noopener noreferrer">인스타에서 보기</a>`:""}</div></div>`;
+  }).join("")||`<div class="card empty">조건에 맞는 기록이 없습니다.</div>`;
+  if(visible.length<filtered.length)$("#hRows").innerHTML+=`<button class="btn block" id="hMore">50개 더 보기 (${filtered.length-visible.length}개 남음)</button>`;
+  $$("#hRows [data-history]").forEach(button=>button.onclick=()=>openPublishedHistory(button.dataset.history));
+  if($("#hMore"))$("#hMore").onclick=()=>{HISTORY_FILTER.limit+=50;refreshHistoryContent()};
+}
+function openPublishedHistory(id){
+  const item=historyData().items.find(record=>String(record.id)===String(id));if(!item)return toast("이력 자료가 갱신됐습니다. 목록에서 다시 선택해 주세요");
+  const status=historyStatus(item),metrics=item.metrics||{},link=historyLink(item.permalink),cover=historyCover(item);let media=(item.media||[]).filter(asset=>historyHttps(asset.media_url));
+  if(!media.length&&historyHttps(item.media_url)&&["릴스","영상"].includes(historyKind(item)))media=[{type:"VIDEO",media_url:item.media_url,thumbnail_url:item.thumbnail_url}];
+  const gallery=media.length?media.map(asset=>["VIDEO","REELS","영상","릴스"].includes(String(asset.type||asset.media_type||"").toUpperCase())?`<video controls playsinline preload="none" src="${esc(historyHttps(asset.media_url))}" ${historyHttps(asset.thumbnail_url)?`poster="${esc(asset.thumbnail_url)}"`:""}></video>`:`<img src="${esc(historyHttps(asset.media_url))}" alt="게시 이미지" loading="lazy" referrerpolicy="no-referrer">`).join(""):cover?`<img src="${esc(cover)}" alt="게시물 표지" loading="lazy" referrerpolicy="no-referrer">`:"";
+  const folders=[...new Set([...(item.local_rels||[]),item.rel,item.folder].filter(Boolean))];
+  openSheet(historyTitle(item),`<div class="chips"><span class="badge ${status==="api_verified"?"ok":"warn"}">${historyStatusLabel(status)}</span>${kindBadge(historyKind(item))}</div>
+    ${status!=="api_verified"?`<div class="alert warn" style="margin-top:10px">${status==="local_only"?"로컬 게시 기록은 있지만 현재 인스타 API로 게시물을 확인하지 못했습니다.":"과거 API 이력은 있지만 이번 전체 조회에서 현재 게시물을 확인하지 못했습니다."} 실제 게시 상태는 인스타에서 확인해 주세요.</div>`:""}
+    <p class="meta">게시일 ${esc(historyDay(item)||"미확인")} · 미디어 ${item.media_count===null||item.media_count===undefined?"개수 미확인":esc(item.media_count)+"개"}</p><p class="meta">게시 시각 ${esc(historyStamp(item.published_at))} · 한국 시간</p>
+    ${gallery?`<div class="strip history-media">${gallery}</div>`:`<p class="sub">미디어는 인스타 원문에서 확인할 수 있습니다.</p>`}
+    ${link?`<div class="acts"><a class="btn primary" href="${esc(link)}" target="_blank" rel="noopener noreferrer">실제 인스타 게시물 보기</a></div>`:""}
+    <h2>게시된 캡션</h2><pre class="src" id="historyCaption">${esc(item.caption||"(캡션 없음)")}</pre>
+    <h2>기록된 반응</h2><div class="checks">${[["조회","views"],["도달","reach"],["좋아요","likes"],["댓글","comments"],["저장","saved"],["공유","shares"]].map(([label,key])=>`<div><b>${label}</b><span>${historyMetric(metrics[key])}</span></div>`).join("")}</div><p class="sub">미집계는 0을 뜻하지 않습니다. 게시 시점과 집계 시점에 따라 수치가 달라집니다.</p>
+    ${folders.length?`<h2>연결된 로컬 회차</h2><pre class="src">${folders.map(esc).join("\n")}</pre>`:`<p class="sub">연결된 로컬 회차가 없는 인스타 게시물입니다.</p>`}
+    <p class="sub">이력 확인 ${esc(historyStamp(item.verified_at||historyData().summary&&historyData().summary.synced_at))}</p>`);
 }
 
 // ── 소재 ──
