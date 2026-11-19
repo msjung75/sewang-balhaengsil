@@ -452,3 +452,24 @@ test('review reset preserves the published archive detail and its search filters
   assert.equal(h.el('historyCaption'),caption);assert.equal(h.el('sheet').classList.contains('open'),true);
   assert.equal(h.run('HISTORY_FILTER.query'),'지점');assert.equal(h.run('REVIEWF'),'all');assert.equal(h.run('S.published_history.summary.api_count'),243);
 });
+
+test('request edits and topic swaps receive the current review epoch through the common sender', async () => {
+  const h=harness();h.context.__puts=[];h.context.__body={id:'request-1',note:'새 메모'};
+  h.run('S.review_reset={epoch:"current-review"};ghPut=async(path,bytes)=>__puts.push({path,bytes});enc=async bytes=>bytes');
+  await h.run('send("update_request",__body,"요청 수정")');
+  await h.run('send("swap_topic",{date:"2026-11-20",title:"새 주제"},"주제 교체")');
+  const commands=h.context.__puts.map(item=>JSON.parse(Buffer.from(item.bytes).subarray(1).toString('utf8')));
+  assert.deepEqual(commands.map(command=>command.type),['update_request','swap_topic']);
+  for(const command of commands)assert.equal(command.body.review_epoch,'current-review');
+  assert.equal(Object.hasOwn(h.context.__body,'review_epoch'),false);
+});
+
+test('the common sender preserves explicitly captured stale or empty epochs for server rejection', async () => {
+  const h=harness();h.context.__puts=[];
+  h.run('S.review_reset={epoch:"current-review"};ghPut=async(path,bytes)=>__puts.push({path,bytes});enc=async bytes=>bytes');
+  await h.run('send("publish",{folder:"old/episode",review_epoch:"captured-before-reset"},"승인")');
+  await h.run('send("update_request",{id:"old-request",review_epoch:""},"요청 수정")');
+  const commands=h.context.__puts.map(item=>JSON.parse(Buffer.from(item.bytes).subarray(1).toString('utf8')));
+  assert.equal(commands[0].body.review_epoch,'captured-before-reset');
+  assert.equal(commands[1].body.review_epoch,'');
+});
