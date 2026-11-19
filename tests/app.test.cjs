@@ -219,21 +219,22 @@ test('all registered episodes appear in the review queue and status filters keep
     { rel: 'unscheduled/failed', title: '원본 확인 요청', status: 'failed', reason: '사진을 확인해 주세요' }
   ];
   h.run('S.review_queue=__queue;TAB="today";render()');
+  const reviewSection=()=>{const el=new Element();el.innerHTML=h.run('reviewBox()');return el};
   assert.match(h.el('main').innerHTML, /발행 전 검토/);
-  assert.equal(h.document.querySelectorAll('[data-open]').length, 3);
+  assert.equal(reviewSection().querySelectorAll('[data-open]').length, 3);
   h.document.querySelectorAll('[data-review-filter]').find(el => el.dataset.reviewFilter === 'review').onclick();
-  assert.deepEqual(h.document.querySelectorAll('[data-open]').map(el => el.dataset.open), ['older/ready']);
+  assert.deepEqual(reviewSection().querySelectorAll('[data-open]').map(el => el.dataset.open), ['older/ready']);
   h.document.querySelectorAll('[data-review-filter]').find(el => el.dataset.reviewFilter === 'working').onclick();
-  assert.deepEqual(h.document.querySelectorAll('[data-open]').map(el => el.dataset.open), ['future/running']);
+  assert.deepEqual(reviewSection().querySelectorAll('[data-open]').map(el => el.dataset.open), ['future/running']);
   h.document.querySelectorAll('[data-review-filter]').find(el => el.dataset.reviewFilter === 'attention').onclick();
-  assert.deepEqual(h.document.querySelectorAll('[data-open]').map(el => el.dataset.open), ['unscheduled/failed']);
+  assert.deepEqual(reviewSection().querySelectorAll('[data-open]').map(el => el.dataset.open), ['unscheduled/failed']);
   assert.equal(h.document.querySelectorAll('[data-produce]').length, 1);
 });
 
 test('review entries outside the calendar can open their exact-path details', () => {
   const h = harness();
   h.run('S.review_queue=[{rel:"older/same-name",title:"지난 날짜 검토본",status:"review"}];S.details["older/same-name"]={cards:["finished-card"],caption:"완성 캡션",check:{items:[],verdict:"ok"},publication_preview:{fingerprint:"fp-old"}};hydrate=()=>{};openEp("older/same-name")');
-  assert.equal(h.el('shT').textContent, '지난 날짜 검토본');
+  assert.equal(h.el('shT').textContent, '완성 캡션');
   assert.equal(h.el('eCap').value, '완성 캡션');
   assert.equal(h.el('eChecked').disabled, false);
 });
@@ -377,4 +378,77 @@ test('today history shortcut opens the full confirmed archive without losing old
   h.el('goHistory').onclick();
   assert.equal(h.run('TAB'),'cal');assert.equal(h.run('CALF'),'past');
   assert.equal(h.run('filteredHistory().length'),243);
+});
+
+function openResetReview(h, epoch='review-before') {
+  h.context.__reviewEpoch=epoch;
+  h.run('S.review_reset={epoch:__reviewEpoch};S.review_queue=[{rel:"episodes/test",title:"검토본",status:"review"}];S.production={jobs:[{rel:"episodes/test",status:"review"}]};S.details.test={cards:["card"],caption:"최종 캡션",check:{items:[],verdict:"ok"},publication_preview:{fingerprint:"fp"}};hydrate=()=>{};openEp("episodes/test")');
+}
+
+test('a reset refresh closes an old approved sheet and displays only the new review scope', async () => {
+  const h=harness();openResetReview(h);h.run('REVIEWF="attention"');
+  const checked=h.el('eChecked'),publish=h.el('ePub');
+  checked.checked=true;checked.onchange();await publish.onclick();
+  const armTimeout=[...h.timeouts.values()].find(timer=>timer.ms===5000);
+  h.context.__fresh=fixture();
+  h.context.__fresh.review_reset={epoch:'review-after',archived_count:23};
+  h.context.__fresh.review_queue=[{rel:'fresh/new',title:'새 자료',status:'needs_input'}];
+  h.context.__fresh.production={jobs:[{rel:'episodes/test',status:'review'}]};
+  h.context.__fresh.details={test:{cards:['old-card'],caption:'옛 캡션',publication_preview:{fingerprint:'fp'}}};
+  h.context.__fresh.published_history={items:[{id:'kept-history'}]};
+  h.run('ghRaw=async path=>path==="d/state.bin"?TE.encode(JSON.stringify(__fresh)):null;dec=async b=>b;unpack=async b=>b;load=__originalLoad');
+  await h.run('load(true)');armTimeout.fn();
+  assert.equal(checked.checked,false);assert.equal(publish.disabled,true);
+  assert.equal(h.el('sheet').classList.contains('open'),false);assert.equal(h.el('ePub'),null);
+  assert.equal(h.run('REVIEWF'),'all');assert.equal(h.run('reviewEpoch()'),'review-after');
+  assert.equal(h.run('productionAllowsReview("episodes/test")'),false);
+  assert.deepEqual(plain(h.run('S.review_queue.map(item=>item.rel)')),['fresh/new']);
+  assert.equal(h.run('S.published_history.items[0].id'),'kept-history');
+});
+
+test('ordinary refresh with the same review epoch preserves the open confirmation', async () => {
+  const h=harness();openResetReview(h);const checkbox=h.el('eChecked');checkbox.checked=true;checkbox.onchange();
+  h.context.__fresh=plain(h.run('S'));h.context.__fresh.at='2026-11-19 10:01';
+  h.run('REVIEWF="review";ghRaw=async path=>path==="d/state.bin"?TE.encode(JSON.stringify(__fresh)):null;dec=async b=>b;unpack=async b=>b;load=__originalLoad');
+  await h.run('load(true)');
+  assert.equal(h.el('eChecked'),checkbox);assert.equal(checkbox.checked,true);
+  assert.equal(h.el('sheet').classList.contains('open'),true);assert.equal(h.run('REVIEWF'),'review');
+});
+
+test('a captured approval cannot publish after reset even if its unchanged episode was restored', async () => {
+  const h=harness();openResetReview(h);h.context.__calls=[];h.run('send=async(...args)=>__calls.push(args)');
+  h.el('eChecked').checked=true;h.el('eChecked').onchange();const publish=h.el('ePub');await publish.onclick();
+  h.run('S.review_reset.epoch="review-after"');await publish.onclick();
+  assert.equal(h.context.__calls.length,0);assert.equal(h.el('eChecked').checked,false);assert.equal(publish.disabled,true);
+});
+
+test('current approval and episode mutations include their captured review epoch', async () => {
+  const h=harness();openResetReview(h,'review-current');h.context.__calls=[];
+  h.run('send=async(...args)=>__calls.push(args);start=()=>{}');
+  await h.el('eSave').onclick();await h.el('ePrev').onclick();
+  h.el('eRev').value='첫 장 문구를 수정해 주세요';await h.el('eRevGo').onclick();
+  h.el('eD').value='2026-11-20';await h.el('eDate').onclick();
+  for(const call of h.context.__calls)assert.equal(call[1].review_epoch,'review-current');
+  assert.deepEqual(h.context.__calls.map(call=>call[0]),['caption','preview','revise','schedule']);
+  h.run('openEp("episodes/test")');h.el('eChecked').checked=true;h.el('eChecked').onchange();await h.el('ePub').onclick();await h.el('ePub').onclick();
+  const publish=h.context.__calls.find(call=>call[0]==='publish');
+  assert.equal(publish[1].review_epoch,'review-current');assert.equal(publish[1].reviewed_fingerprint,'fp');
+});
+
+test('archived or stale production buttons cannot restore an old review item', async () => {
+  const h=harness();openResetReview(h);h.context.__calls=[];h.run('send=async(...args)=>__calls.push(args);S.review_reset.epoch="review-after";S.review_queue=[]');
+  assert.equal(await h.run('requestProduction("episodes/test",null,"review-before")'),false);
+  h.run('openEp("episodes/test")');
+  assert.equal(h.context.__calls.length,0);assert.equal(h.run('productionAllowsReview("episodes/test")'),false);
+});
+
+test('review reset preserves the published archive detail and its search filters', async () => {
+  const h=harness();showHistory(h);
+  h.run('S.review_reset={epoch:"review-before"};REVIEWF="attention";HISTORY_FILTER.query="지점";openPublishedHistory("post-0")');
+  const caption=h.el('historyCaption');
+  h.context.__fresh=historyFixture();h.context.__fresh.review_reset={epoch:'review-after'};h.context.__fresh.review_queue=[];
+  h.run('ghRaw=async path=>path==="d/state.bin"?TE.encode(JSON.stringify(__fresh)):null;dec=async b=>b;unpack=async b=>b;load=__originalLoad');
+  await h.run('load(true)');
+  assert.equal(h.el('historyCaption'),caption);assert.equal(h.el('sheet').classList.contains('open'),true);
+  assert.equal(h.run('HISTORY_FILTER.query'),'지점');assert.equal(h.run('REVIEWF'),'all');assert.equal(h.run('S.published_history.summary.api_count'),243);
 });
