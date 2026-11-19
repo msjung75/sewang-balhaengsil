@@ -342,7 +342,17 @@ async function load(quiet){
     const [st,pg]=await Promise.all([ghRaw("d/state.bin"),ghRaw("d/ping.json").catch(()=>null)]);
     if(pg) try{PING=JSON.parse(TD.decode(pg))}catch(e){}
     if(!st){LASTERR="맥이 아직 첫 자료를 올리지 않았습니다(1~3분)"; if(!S) render(); return}
-    S=JSON.parse(TD.decode(await unpack(await dec(st))));
+    const next=JSON.parse(TD.decode(await unpack(await dec(st)))),nextEpoch=reviewEpoch(next),previousEpoch=reviewEpoch(S)||LS.get("sw-review-epoch","");
+    S=next;LS.set("sw-review-epoch",nextEpoch);
+    if(nextEpoch&&nextEpoch!==previousEpoch){
+      REVIEWF="all";LS.set("sw-review-filter",REVIEWF);
+      if($("#eChecked")||$("#eProduce")||$("#eCap")){
+        if($("#eChecked"))$("#eChecked").checked=false;
+        if($("#ePub"))$("#ePub").disabled=true;
+        $$("#shB video").forEach(video=>video.pause());
+        $("#sheet").classList.remove("open");$("#sbg").classList.remove("open");$("#shB").innerHTML="";
+      }
+    }
     const done=new Set((S.results||[]).map(r=>r.id)); LS.set("sw-pend",pending().filter(p=>!done.has(p.id)));
     LASTERR="";
     if(UPLOADING||(quiet&&$("#pf")&&TAB==="photo")||$("#sheet").classList.contains("open"))statusLine();else if(quiet&&historyScreenActive()){statusLine();refreshHistoryContent()}else render();
@@ -440,14 +450,17 @@ function vWorkflow(){
 
 // ── 오늘 ──
 let REVIEWF=LS.get("sw-review-filter","all");
+function reviewEpoch(state=S){return String(state&&state.review_reset&&state.review_reset.epoch||"")}
+function reviewRelCurrent(rel){return !reviewEpoch()||Array.isArray(S.review_queue)&&S.review_queue.some(item=>item.rel===rel)}
 const PRODUCTION_LABELS={queued:"제작 대기",running:"완성본 제작 중",review:"대표님 검토 대기",ready:"대표님 검토 대기",completed:"대표님 검토 대기",failed:"제작 실패",needs_input:"자료·메모 확인 필요",needs_production:"제작 필요",blocked:"점검 후 수정 필요",unavailable:"원본 확인 필요",held:"보류",stale:"날짜·출처 재확인",cancelled:"제작 요청 취소됨"};
 function productionJob(rel){return (((S||{}).production||{}).jobs||[]).find(j=>(j.rel||j.folder)===rel)||null}
 function productionStatus(rel){const j=productionJob(rel),r=((S||{}).review_queue||[]).find(x=>x.rel===rel);return j&&(j.status||j.state)||r&&r.status||""}
-function productionAllowsReview(rel){const status=productionStatus(rel);return !status||["review","ready","completed"].includes(status)}
+function productionAllowsReview(rel){if(!reviewRelCurrent(rel))return false;const status=productionStatus(rel);return !status||["review","ready","completed"].includes(status)}
 function productionNote(j){return j&&(j.message||j.last_error||j.error||j.note)||""}
-async function requestProduction(rel,button){
+async function requestProduction(rel,button,epoch=reviewEpoch()){
+  if(epoch!==reviewEpoch()||!reviewRelCurrent(rel)){toast("검토 목록이 새로 구성됐습니다. 현재 목록에서 회차를 선택해 주세요");return false}
   const label=button&&button.textContent;if(button)button.disabled=true;
-  try{await send("produce",{folder:rel},"완성본 제작: "+rel.split("/").pop().slice(0,28));if(button)button.textContent="제작 요청 보냄";return true}
+  try{await send("produce",{folder:rel,...(epoch?{review_epoch:epoch}:{})},"완성본 제작: "+rel.split("/").pop().slice(0,28));if(button)button.textContent="제작 요청 보냄";return true}
   catch(e){toast(e.message);if(button){button.disabled=false;button.textContent=label}return false}
 }
 function reviewGroup(status){return ["review","ready","completed"].includes(status)?"review":["queued","running"].includes(status)?"working":"attention"}
@@ -765,13 +778,15 @@ function epOf(rel){
   return [null,item];
 }
 function openEp(rel){
+  if(!reviewRelCurrent(rel)){toast("검토 목록이 새로 구성됐습니다. 현재 목록에서 회차를 선택해 주세요");return}
+  const previewEpoch=reviewEpoch(),reviewProof=previewEpoch?{review_epoch:previewEpoch}:{};
   const det=detailOf(rel), [d,e]=epOf(rel);
   const title=episodeTitle(e||{rel}),job=productionJob(rel),production=productionStatus(rel);
   const productionPanel=production?`<div class="alert ${production==="failed"?"fail":["review","ready","completed"].includes(production)?"ok":"info"}"><b>${esc(PRODUCTION_LABELS[production]||production)}</b>${productionNote(job)?`<br>${esc(productionNote(job))}`:""}</div>${["failed","needs_input","needs_production","cancelled"].includes(production)?`<button class="btn sm block" style="margin-bottom:10px" id="eProduce">${production==="failed"?"다시 제작":"완성본 제작 요청"}</button>`:""}`:"";
   if(!det){
     openSheet(title,`${productionPanel}${e&&e.thumb?`<img class="th" style="width:100%;height:auto;max-height:60vh;object-fit:contain" data-m="${esc(e.thumb)}">`:""}
      ${e&&e.posted?`<p>게시됨 ${esc(e.posted.at||"")}</p>${e.posted.permalink?`<a class="btn primary" href="${esc(e.posted.permalink)}" target="_blank" rel="noopener">인스타에서 보기</a>`:""}`:`<p class="sub">상세 자료를 준비하고 있습니다. 원본과 제작 상태를 확인한 뒤 새로고침해 주세요.</p>`}`);
-    if($("#eProduce"))$("#eProduce").onclick=()=>requestProduction(rel,$("#eProduce"));
+    if($("#eProduce"))$("#eProduce").onclick=()=>requestProduction(rel,$("#eProduce"),previewEpoch);
     hydrate($("#shB")); return;
   }
   const chk=det.check||{items:[],verdict:"ok"}, posted=e&&e.posted;
@@ -811,27 +826,28 @@ function openEp(rel){
    ${det.request?`<details><summary>제작 요청 메모</summary><pre class="src">${esc(det.request)}</pre></details>`:""}`);
   hydrate($("#shB"));
   const cap=$("#eCap"),pub=$("#ePub"),confirmed=$("#eChecked");let disarmPublish=()=>{},captionPending=false;
-  const canApprove=()=>ready&&chk.verdict!=="fail"&&!captionPending&&confirmed&&confirmed.checked&&(!warnOnly||$("#eW").checked)&&cap.value===(det.caption||"");
+  const canApprove=()=>previewEpoch===reviewEpoch()&&reviewRelCurrent(rel)&&ready&&chk.verdict!=="fail"&&!captionPending&&confirmed&&confirmed.checked&&(!warnOnly||$("#eW").checked)&&cap.value===(det.caption||"");
   const syncApproval=()=>{if(!pub)return;pub.disabled=!canApprove();pub.textContent=chk.verdict==="fail"?"실패 항목이 있어 게시 잠김":!ready?"완성본 준비 후 승인 가능":captionPending?"변경 반영 후 미리보기를 다시 열어 주세요":canApprove()?"✅ 승인하고 지금 게시":"내용 확인 후 승인 가능"};
   const upd=()=>{const t=cap.value,n=(t.match(/#[^\s#]+/g)||[]).length;$("#eLen").textContent=`${t.length}자 · 해시태그 ${n}개${n<3||n>5?" ⚠ 3~5개":""}`};
   cap.oninput=()=>{upd();if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()};upd();
   if(confirmed)confirmed.onchange=()=>{disarmPublish();syncApproval()};
   if($("#eW"))$("#eW").onchange=()=>{disarmPublish();syncApproval()};
-  if($("#eProduce"))$("#eProduce").onclick=async()=>{captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval();await requestProduction(rel,$("#eProduce"))};
+  if($("#eProduce"))$("#eProduce").onclick=async()=>{captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval();await requestProduction(rel,$("#eProduce"),previewEpoch)};
   $("#eReload").onclick=async()=>{const b=$("#eReload");b.disabled=true;try{await load(true);if(!LASTERR)openEp(rel);else toast(LASTERR)}finally{if(b.isConnected)b.disabled=false}};
-  $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value},"캡션 저장");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()}catch(e){toast(e.message)}};
-  $("#eDate").onclick=async()=>{const v=$("#eD").value;if(!v)return;try{await send("schedule",{date:v,folder:rel},"날짜 → "+v.slice(5))}catch(e){toast(e.message)}};
+  $("#eSave").onclick=async()=>{try{await send("caption",{folder:rel,text:cap.value,...reviewProof},"캡션 저장");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval()}catch(e){toast(e.message)}};
+  $("#eDate").onclick=async()=>{const v=$("#eD").value;if(!v)return;try{await send("schedule",{date:v,folder:rel,...reviewProof},"날짜 → "+v.slice(5))}catch(e){toast(e.message)}};
   if($("#eSwap")) $("#eSwap").onclick=()=>{SWAPDAY=d.day;PREDATE=null;closeSheet();TAB="topics";LS.set("sw-tab",TAB);$$("nav.bot button").forEach(x=>x.classList.toggle("on",x.dataset.tab===TAB));render();window.scrollTo(0,0)};
-  $("#ePrev").onclick=async()=>{try{await send("preview",{folder:rel},"미리보기 재발송")}catch(e){toast(e.message)}};
-  $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n},"수정 요청");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval();$("#eRev").value=""}catch(e){toast(e.message)}};
+  $("#ePrev").onclick=async()=>{try{await send("preview",{folder:rel,...reviewProof},"미리보기 재발송")}catch(e){toast(e.message)}};
+  $("#eRevGo").onclick=async()=>{const n=$("#eRev").value.trim();if(!n)return toast("내용을 적어 주세요");try{await send("revise",{folder:rel,note:n,...reviewProof},"수정 요청");captionPending=true;if(confirmed)confirmed.checked=false;disarmPublish();syncApproval();$("#eRev").value=""}catch(e){toast(e.message)}};
   if(pub&&chk.verdict!=="fail"&&ready){pub._sync=syncApproval;disarmPublish=armTwice(pub,"한 번 더 누르면 인스타에 게시됩니다",async()=>{
+    if(previewEpoch!==reviewEpoch()||!reviewRelCurrent(rel)){confirmed.checked=false;toast("검토 목록이 새로 구성됐습니다. 최신 목록에서 다시 확인해 주세요");syncApproval();return false}
     if(!confirmed.checked){toast("이미지·영상과 최종 캡션 확인을 체크해 주세요");return false}
     if(warnOnly&&!$("#eW").checked){toast("주의 항목 확인 체크를 해 주세요");return false}
     if(!det.publication_preview||!det.publication_preview.fingerprint){toast("새 미리보기가 동기화된 뒤 승인해 주세요");return false}
     if(cap.value!==(det.caption||"")){toast("캡션을 먼저 저장하고 새 미리보기를 확인해 주세요");return false}
     const latest=detailOf(rel),fingerprint=det.publication_preview.fingerprint;
     if(!productionAllowsReview(rel)||!latest||!latest.publication_preview||latest.publication_preview.fingerprint!==fingerprint){confirmed.checked=false;toast("완성본이 바뀌었습니다. 최신 미리보기를 다시 확인해 주세요");syncApproval();return false}
-    try{await send("publish",{folder:rel,allow_warn:warnOnly,fingerprint,reviewed:true,reviewed_fingerprint:fingerprint},"게시: "+title.slice(0,20));closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message)}})}
+    try{await send("publish",{folder:rel,allow_warn:warnOnly,fingerprint,reviewed:true,reviewed_fingerprint:fingerprint,...reviewProof},"게시: "+title.slice(0,20));closeSheet();TAB="today";LS.set("sw-tab",TAB);start()}catch(e){toast(e.message)}})}
   syncApproval();
 }
 
