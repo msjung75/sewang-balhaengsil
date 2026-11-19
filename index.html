@@ -272,7 +272,9 @@ const rid=()=>Date.now()+"_"+hex(crypto.getRandomValues(new Uint8Array(4)));
 function pending(){return LS.get("sw-pend",[])}
 async function send(type,body,label,files){
   const id="m"+rid();
-  const cmd={id,ts:Date.now(),type,body:body||{},files:files||[],from:"phone"};
+  const payload={...(body||{})};
+  if(!Object.prototype.hasOwnProperty.call(payload,"review_epoch")&&reviewEpoch())payload.review_epoch=reviewEpoch();
+  const cmd={id,ts:Date.now(),type,body:payload,files:files||[],from:"phone"};
   await ghPut(`inbox/c_${id}.bin`,await enc(cat(new Uint8Array([82]),TE.encode(JSON.stringify(cmd)))),"폰 명령 "+type);
   const p=pending(); p.push({id,label:label||type,at:new Date().toTimeString().slice(0,5)}); LS.set("sw-pend",p.slice(-20));
   toast(macAge()!=null&&macAge()<5?"요청을 보냈습니다. 처리 결과는 ‘오늘’에 표시됩니다":"요청을 보관했습니다. 맥이 연결되면 처리됩니다");
